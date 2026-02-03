@@ -1,6 +1,19 @@
 [package]
 name = "just-bash"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+
+[lib]
+name = "just_bash"
+path = "src/lib.rs"
+
+[[bin]]
+name = "just-bash"
+path = "src/main.rs"
 
 [dependencies]
+thiserror = "1.0"
+lazy_static = "1.4"
+regex-lite = "0.1"
+
+[dev-dependencies]

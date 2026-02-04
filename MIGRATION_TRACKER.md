@@ -50,28 +50,28 @@
 - [x] `builtins/break.ts` → `builtins/break_cmd.rs` ✅ 已对齐
 - [ ] `builtins/cd.ts`
 - [ ] `builtins/compgen.ts`
-- [ ] `builtins/complete.ts`
-- [ ] `builtins/compopt.ts`
+- [x] `builtins/complete.ts` → `builtins/complete_cmd.rs` ✅ 已对齐
+- [x] `builtins/compopt.ts` → `builtins/compopt_cmd.rs` ✅ 已对齐
 - [x] `builtins/continue.ts` → `builtins/continue_cmd.rs` ✅ 已对齐
-- [ ] `builtins/declare-array-parsing.ts`
-- [ ] `builtins/declare-print.ts`
+- [x] `builtins/declare-array-parsing.ts` → `builtins/declare_array_parsing.rs` ✅ 已对齐
+- [x] `builtins/declare-print.ts` → `builtins/declare_print.rs` ✅ 已对齐
 - [ ] `builtins/declare.ts`
 - [ ] `builtins/dirs.ts`
 - [ ] `builtins/eval.ts`
 - [x] `builtins/exit.ts` → `builtins/exit_cmd.rs` ✅ 已对齐
-- [ ] `builtins/export.ts`
-- [ ] `builtins/getopts.ts`
+- [x] `builtins/export.ts` → `builtins/export_cmd.rs` ✅ 已对齐
+- [x] `builtins/getopts.ts` → `builtins/getopts_cmd.rs` ✅ 已对齐
 - [ ] `builtins/hash.ts`
-- [ ] `builtins/help.ts`
+- [x] `builtins/help.ts` → `builtins/help_cmd.rs` ✅ 已对齐
 - [ ] `builtins/index.ts`
 - [ ] `builtins/let.ts`
 - [ ] `builtins/local.ts`
-- [ ] `builtins/mapfile.ts`
-- [ ] `builtins/read.ts`
+- [x] `builtins/mapfile.ts` → `builtins/mapfile_cmd.rs` ✅ 已对齐
+- [x] `builtins/read.ts` → `builtins/read_cmd.rs` ✅ 已对齐
 - [x] `builtins/return.ts` → `builtins/return_cmd.rs` ✅ 已对齐
-- [ ] `builtins/set.ts`
-- [ ] `builtins/shift.ts`
-- [ ] `builtins/shopt.ts`
+- [x] `builtins/set.ts` → `builtins/set_cmd.rs` ✅ 已对齐
+- [x] `builtins/shift.ts` → `builtins/shift_cmd.rs` ✅ 已对齐
+- [x] `builtins/shopt.ts` → `builtins/shopt_cmd.rs` ✅ 已对齐
 - [ ] `builtins/source.ts`
 - [ ] `builtins/unset.ts`
 - [ ] `builtins/variable-assignment.ts`
@@ -161,17 +161,17 @@
 |------|--------|--------|----------|----------|------|
 | parser | 11 | 0 | 11 ✅ | 0 | 11 |
 | interpreter (主目录) | 11 | 7 | 11 ✅ | 0 | 18 |
-| interpreter/builtins | 4 | 24 | 4 ✅ | 0 | 28 |
+| interpreter/builtins | 16 | 12 | 16 ✅ | 0 | 28 |
 | interpreter/expansion | 23 | 0 | 23 ✅ | 0 | 23 |
 | interpreter/helpers | 22 | 0 | 22 ✅ | 0 | 22 |
-| **源文件总计** | **71** | **31** | **71** | **0** | **102** |
+| **源文件总计** | **83** | **19** | **83** | **0** | **102** |
 | 测试文件 | 0 | 22 | 0 | 0 | 22 |
 
 ## 迁移进度
 
-- 源文件已迁移: 71 / 102 (70%)
-- 完全对齐: 71 / 71 (100%) ✅
-- 部分对齐 (需补充): 0 / 71 (0%)
+- 源文件已迁移: 83 / 102 (81%)
+- 完全对齐: 83 / 83 (100%) ✅
+- 部分对齐 (需补充): 0 / 83 (0%)
 - 测试文件已完成: 0 / 22 (0%)
 
 ---

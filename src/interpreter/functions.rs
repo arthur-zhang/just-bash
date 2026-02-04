@@ -1,0 +1,302 @@
+//! Function Handling
+//!
+//! Handles shell function definition and invocation:
+//! - Function definition (adding to function table)
+//! - Function calls (with positional parameters and local scopes)
+
+use std::collections::HashMap;
+use crate::FunctionDefNode;
+use crate::interpreter::errors::{ExitError, ReturnError};
+use crate::interpreter::types::{ExecResult, InterpreterState};
+use crate::interpreter::helpers::shell_constants::POSIX_SPECIAL_BUILTINS;
+
+/// Execute a function definition (add to function table).
+/// Returns Ok(ExecResult) on success, or Err with ExitError if the function
+/// name conflicts with a POSIX special builtin in POSIX mode.
+pub fn execute_function_def(
+    state: &mut InterpreterState,
+    node: &FunctionDefNode,
+    current_source: Option<&str>,
+) -> Result<ExecResult, ExitError> {
+    // In POSIX mode, special built-ins cannot be redefined as functions
+    // This is a fatal error that exits the script
+    if state.options.posix && POSIX_SPECIAL_BUILTINS.contains(node.name.as_str()) {
+        let stderr = format!(
+            "bash: line {}: `{}': is a special builtin\n",
+            state.current_line,
+            node.name
+        );
+        return Err(ExitError::new(2, String::new(), stderr));
+    }
+
+    // Store the source file where this function is defined (for BASH_SOURCE)
+    let mut func_with_source = node.clone();
+    if func_with_source.source_file.is_none() {
+        func_with_source.source_file = current_source.map(|s| s.to_string());
+    }
+    if func_with_source.source_file.is_none() {
+        func_with_source.source_file = Some("main".to_string());
+    }
+
+    // Add to function table
+    state.functions.insert(node.name.clone(), func_with_source);
+
+    Ok(ExecResult::ok())
+}
+
+/// Check if a function is defined
+pub fn is_function_defined(state: &InterpreterState, name: &str) -> bool {
+    state.functions.contains_key(name)
+}
+
+/// Get a function definition by name
+pub fn get_function<'a>(state: &'a InterpreterState, name: &str) -> Option<&'a FunctionDefNode> {
+    state.functions.get(name)
+}
+
+/// Remove a function definition
+pub fn unset_function(state: &mut InterpreterState, name: &str) -> bool {
+    state.functions.remove(name).is_some()
+}
+
+/// Get all function names
+pub fn get_function_names(state: &InterpreterState) -> Vec<String> {
+    state.functions.keys().cloned().collect()
+}
+
+/// Prepare for function call by setting up local scope and positional parameters.
+/// Returns a FunctionCallContext that should be used to cleanup after the call.
+pub struct FunctionCallContext {
+    /// Saved positional parameters
+    pub saved_positional: HashMap<String, Option<String>>,
+    /// The scope index for this call
+    pub scope_index: usize,
+}
+
+/// Set up the environment for a function call.
+/// This pushes a new local scope and sets up positional parameters.
+pub fn setup_function_call(
+    state: &mut InterpreterState,
+    func: &FunctionDefNode,
+    args: &[String],
+    call_line: Option<u32>,
+) -> Result<FunctionCallContext, ExitError> {
+    // Increment call depth
+    state.call_depth += 1;
+
+    // Initialize stacks if not present
+    if state.func_name_stack.is_none() {
+        state.func_name_stack = Some(Vec::new());
+    }
+    if state.call_line_stack.is_none() {
+        state.call_line_stack = Some(Vec::new());
+    }
+    if state.source_stack.is_none() {
+        state.source_stack = Some(Vec::new());
+    }
+
+    // Push the function name and the line where it was called from
+    state.func_name_stack.as_mut().unwrap().insert(0, func.name.clone());
+    state.call_line_stack.as_mut().unwrap().insert(0, call_line.unwrap_or(state.current_line));
+    state.source_stack.as_mut().unwrap().insert(0, func.source_file.clone().unwrap_or_else(|| "main".to_string()));
+
+    // Push a new local scope
+    state.local_scopes.push(HashMap::new());
+    let scope_index = state.local_scopes.len() - 1;
+
+    // Push a new set for tracking exports made in this scope
+    if state.local_exported_vars.is_none() {
+        state.local_exported_vars = Some(Vec::new());
+    }
+    state.local_exported_vars.as_mut().unwrap().push(std::collections::HashSet::new());
+
+    // Save and set positional parameters
+    let mut saved_positional = HashMap::new();
+    for (i, arg) in args.iter().enumerate() {
+        let key = (i + 1).to_string();
+        saved_positional.insert(key.clone(), state.env.get(&key).cloned());
+        state.env.insert(key, arg.clone());
+    }
+    saved_positional.insert("@".to_string(), state.env.get("@").cloned());
+    saved_positional.insert("#".to_string(), state.env.get("#").cloned());
+    state.env.insert("@".to_string(), args.join(" "));
+    state.env.insert("#".to_string(), args.len().to_string());
+
+    Ok(FunctionCallContext {
+        saved_positional,
+        scope_index,
+    })
+}
+
+/// Clean up after a function call.
+/// This pops the local scope and restores positional parameters.
+pub fn cleanup_function_call(
+    state: &mut InterpreterState,
+    ctx: FunctionCallContext,
+) {
+    // Pop local scope and restore variables
+    if let Some(local_scope) = state.local_scopes.pop() {
+        for (var_name, original_value) in local_scope {
+            match original_value {
+                Some(value) => { state.env.insert(var_name, value); }
+                None => { state.env.remove(&var_name); }
+            }
+        }
+    }
+
+    // Pop local export tracking and restore export state
+    if let Some(ref mut local_exported_vars) = state.local_exported_vars {
+        if let Some(local_exports) = local_exported_vars.pop() {
+            if let Some(ref mut exported_vars) = state.exported_vars {
+                for name in local_exports {
+                    exported_vars.remove(&name);
+                }
+            }
+        }
+    }
+
+    // Restore positional parameters
+    for (key, value) in ctx.saved_positional {
+        match value {
+            Some(v) => { state.env.insert(key, v); }
+            None => { state.env.remove(&key); }
+        }
+    }
+
+    // Pop from call stack tracking
+    if let Some(ref mut stack) = state.func_name_stack {
+        if !stack.is_empty() {
+            stack.remove(0);
+        }
+    }
+    if let Some(ref mut stack) = state.call_line_stack {
+        if !stack.is_empty() {
+            stack.remove(0);
+        }
+    }
+    if let Some(ref mut stack) = state.source_stack {
+        if !stack.is_empty() {
+            stack.remove(0);
+        }
+    }
+
+    // Decrement call depth
+    state.call_depth -= 1;
+}
+
+/// Handle a return error from a function call.
+/// Converts the ReturnError to a normal ExecResult.
+pub fn handle_return_error(error: ReturnError) -> ExecResult {
+    ExecResult {
+        stdout: error.stdout,
+        stderr: error.stderr,
+        exit_code: error.exit_code,
+        env: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{CompoundCommandNode, GroupNode};
+
+    fn make_state() -> InterpreterState {
+        InterpreterState::default()
+    }
+
+    fn make_function(name: &str) -> FunctionDefNode {
+        FunctionDefNode {
+            name: name.to_string(),
+            body: Box::new(CompoundCommandNode::Group(GroupNode {
+                body: vec![],
+                redirections: vec![],
+            })),
+            redirections: vec![],
+            source_file: None,
+        }
+    }
+
+    #[test]
+    fn test_execute_function_def() {
+        let mut state = make_state();
+        let func = make_function("myfunc");
+
+        let result = execute_function_def(&mut state, &func, None);
+        assert!(result.is_ok());
+        assert!(is_function_defined(&state, "myfunc"));
+    }
+
+    #[test]
+    fn test_execute_function_def_posix_special_builtin() {
+        let mut state = make_state();
+        state.options.posix = true;
+        let func = make_function("break"); // break is a POSIX special builtin
+
+        let result = execute_function_def(&mut state, &func, None);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.exit_code, 2);
+        assert!(err.stderr.contains("special builtin"));
+    }
+
+    #[test]
+    fn test_get_function() {
+        let mut state = make_state();
+        let func = make_function("myfunc");
+        execute_function_def(&mut state, &func, None).unwrap();
+
+        let retrieved = get_function(&state, "myfunc");
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().name, "myfunc");
+
+        assert!(get_function(&state, "nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_unset_function() {
+        let mut state = make_state();
+        let func = make_function("myfunc");
+        execute_function_def(&mut state, &func, None).unwrap();
+
+        assert!(is_function_defined(&state, "myfunc"));
+        assert!(unset_function(&mut state, "myfunc"));
+        assert!(!is_function_defined(&state, "myfunc"));
+        assert!(!unset_function(&mut state, "myfunc")); // Already removed
+    }
+
+    #[test]
+    fn test_get_function_names() {
+        let mut state = make_state();
+        execute_function_def(&mut state, &make_function("func1"), None).unwrap();
+        execute_function_def(&mut state, &make_function("func2"), None).unwrap();
+
+        let names = get_function_names(&state);
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"func1".to_string()));
+        assert!(names.contains(&"func2".to_string()));
+    }
+
+    #[test]
+    fn test_setup_and_cleanup_function_call() {
+        let mut state = make_state();
+        let func = make_function("myfunc");
+        let args = vec!["arg1".to_string(), "arg2".to_string()];
+
+        // Setup
+        let ctx = setup_function_call(&mut state, &func, &args, Some(10)).unwrap();
+
+        // Check positional parameters are set
+        assert_eq!(state.env.get("1"), Some(&"arg1".to_string()));
+        assert_eq!(state.env.get("2"), Some(&"arg2".to_string()));
+        assert_eq!(state.env.get("#"), Some(&"2".to_string()));
+        assert_eq!(state.call_depth, 1);
+
+        // Cleanup
+        cleanup_function_call(&mut state, ctx);
+
+        // Check positional parameters are restored
+        assert!(state.env.get("1").is_none());
+        assert!(state.env.get("2").is_none());
+        assert_eq!(state.call_depth, 0);
+    }
+}

@@ -17,5 +17,6 @@ pub mod parser;
 // Re-exports
 pub use types::ParseException;
 pub use lexer::{Lexer, Token, TokenType, LexerError};
-pub use arithmetic_parser::parse_arithmetic_expression;
+pub use arithmetic_parser::{parse_arithmetic_expression, parse_arith_expr};
+pub use arithmetic_primaries::parse_arith_number;
 pub use parser::{parse, Parser};

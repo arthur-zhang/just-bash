@@ -1,9 +1,9 @@
-//! just-bash - A simulated bash environment parser
+//! just-bash - A simulated bash environment
 //!
-//! This library provides a complete parser for bash scripts, producing an AST
-//! that can be used for interpretation or analysis.
+//! This library provides a complete parser and interpreter for bash scripts.
 
 pub mod ast;
+pub mod interpreter;
 pub mod parser;
 
 pub use ast::types::*;

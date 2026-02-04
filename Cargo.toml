@@ -15,5 +15,9 @@ path = "src/main.rs"
 thiserror = "1.0"
 lazy_static = "1.4"
 regex-lite = "0.1"
+chrono = "0.4"
+rand = "0.8"
+libc = "0.2"
+glob = "0.3"
 
 [dev-dependencies]

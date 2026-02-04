@@ -646,7 +646,7 @@ impl Lexer {
             let chars: Vec<char> = op_str.chars().collect();
             if chars.len() >= 2 && c0 == chars[0] && c1 == Some(chars[1]) {
                 // Skip (( and )) handled above
-                if (*op_str == "((" || *op_str == "))") {
+                if *op_str == "((" || *op_str == "))" {
                     continue;
                 }
                 // Skip ;; and ;;& inside (( )) context
@@ -891,11 +891,39 @@ impl Lexer {
             return false;
         }
         
+        // If followed by arithmetic operators without space, likely arithmetic
+        if word_end == after_word && matches!(next_char, '+' | '*' | '/' | '%' | '<' | '>' | '&' | '|' | '^' | '!' | '~' | '?' | ':') && next_char != '-' {
+            return false;
+        }
+
         // If followed by )), it's arithmetic
         if next_char == ')' && self.input.get(after_word + 1) == Some(&')') {
             return false;
         }
-        
+
+        // If followed by command-like arguments after whitespace, it's likely a command
+        if after_word > word_end
+            && (next_char == '-'
+                || next_char == '"'
+                || next_char == '\''
+                || next_char == '$'
+                || next_char.is_ascii_alphabetic()
+                || next_char == '_'
+                || next_char == '/'
+                || next_char == '.')
+        {
+            // Scan ahead to find ) on the same line
+            let mut scan_pos = after_word;
+            while scan_pos < self.input.len() && self.input[scan_pos] != '\n' {
+                if self.input[scan_pos] == ')' {
+                    return true;
+                }
+                scan_pos += 1;
+            }
+            // No ) found on this line - not a proper subshell
+            return false;
+        }
+
         // If followed by ) then || or &&, it's nested subshells
         if next_char == ')' {
             let mut after_paren = after_word + 1;
@@ -1217,15 +1245,21 @@ impl Lexer {
                 value.push(self.current().unwrap());
                 self.pos += 1;
                 col += 1;
-                
+
                 let mut depth = 1;
                 let mut in_sq = false;
                 let mut in_dq = false;
-                
+                let mut case_depth = 0;
+                let mut in_case_pattern = false;
+                let mut word_buffer = String::new();
+
+                // Check if this is $((...)) arithmetic expansion
+                let is_arithmetic = self.current() == Some('(') && !self.dollar_dparen_is_subshell(self.pos);
+
                 while depth > 0 && self.pos < self.input.len() {
                     let ch = self.input[self.pos];
                     value.push(ch);
-                    
+
                     if in_sq {
                         if ch == '\'' {
                             in_sq = false;
@@ -1239,23 +1273,116 @@ impl Lexer {
                             in_dq = false;
                         }
                     } else {
-                        match ch {
-                            '\'' => in_sq = true,
-                            '"' => in_dq = true,
-                            '\\' if self.pos + 1 < self.input.len() => {
-                                value.push(self.input[self.pos + 1]);
+                        // Not in quotes
+                        if ch == '\'' {
+                            in_sq = true;
+                            word_buffer.clear();
+                        } else if ch == '"' {
+                            in_dq = true;
+                            word_buffer.clear();
+                        } else if ch == '\\' && self.pos + 1 < self.input.len() {
+                            value.push(self.input[self.pos + 1]);
+                            self.pos += 1;
+                            col += 1;
+                            word_buffer.clear();
+                        } else if ch == '$' && self.peek(1) == Some('{') {
+                            // Handle ${...} parameter expansion - consume the entire construct
+                            self.pos += 1;
+                            col += 1;
+                            value.push(self.input[self.pos]); // Add the {
+                            self.pos += 1;
+                            col += 1;
+                            let mut brace_depth = 1;
+                            let mut in_brace_sq = false;
+                            let mut in_brace_dq = false;
+                            while brace_depth > 0 && self.pos < self.input.len() {
+                                let bc = self.input[self.pos];
+                                if bc == '\\' && self.pos + 1 < self.input.len() && !in_brace_sq {
+                                    value.push(bc);
+                                    self.pos += 1;
+                                    col += 1;
+                                    value.push(self.input[self.pos]);
+                                    self.pos += 1;
+                                    col += 1;
+                                    continue;
+                                }
+                                value.push(bc);
+                                if in_brace_sq {
+                                    if bc == '\'' {
+                                        in_brace_sq = false;
+                                    }
+                                } else if in_brace_dq {
+                                    if bc == '"' {
+                                        in_brace_dq = false;
+                                    }
+                                } else {
+                                    match bc {
+                                        '\'' => in_brace_sq = true,
+                                        '"' => in_brace_dq = true,
+                                        '{' => brace_depth += 1,
+                                        '}' => brace_depth -= 1,
+                                        _ => {}
+                                    }
+                                }
+                                if bc == '\n' {
+                                    ln += 1;
+                                    col = 0;
+                                } else {
+                                    col += 1;
+                                }
+                                self.pos += 1;
+                            }
+                            word_buffer.clear();
+                            continue;
+                        } else if ch == '#' && !is_arithmetic && (word_buffer.is_empty() || self.input.get(self.pos.wrapping_sub(1)).map_or(false, |c| c.is_whitespace())) {
+                            // Comment - skip to end of line (only in command substitution, not arithmetic)
+                            while self.pos + 1 < self.input.len() && self.input[self.pos + 1] != '\n' {
                                 self.pos += 1;
                                 col += 1;
+                                value.push(self.input[self.pos]);
                             }
-                            '(' => depth += 1,
-                            ')' => depth -= 1,
-                            _ => {}
+                            word_buffer.clear();
+                        } else if ch.is_ascii_alphabetic() || ch == '_' {
+                            word_buffer.push(ch);
+                        } else {
+                            // Check for keywords
+                            if word_buffer == "case" {
+                                case_depth += 1;
+                                in_case_pattern = false;
+                            } else if word_buffer == "in" && case_depth > 0 {
+                                in_case_pattern = true;
+                            } else if word_buffer == "esac" && case_depth > 0 {
+                                case_depth -= 1;
+                                in_case_pattern = false;
+                            }
+                            word_buffer.clear();
+
+                            if ch == '(' {
+                                // Check for $( which starts nested command substitution
+                                if self.pos > 0 && self.input.get(self.pos.wrapping_sub(1)) == Some(&'$') {
+                                    depth += 1;
+                                } else if !in_case_pattern {
+                                    depth += 1;
+                                }
+                            } else if ch == ')' {
+                                if in_case_pattern {
+                                    in_case_pattern = false;
+                                } else {
+                                    depth -= 1;
+                                }
+                            } else if ch == ';' {
+                                // ;; in case body means next pattern
+                                if case_depth > 0 && self.peek(1) == Some(';') {
+                                    in_case_pattern = true;
+                                }
+                            }
                         }
                     }
-                    
+
                     if ch == '\n' {
                         ln += 1;
                         col = 0;
+                        word_buffer.clear();
                     }
                     self.pos += 1;
                     col += 1;
@@ -1271,14 +1398,18 @@ impl Lexer {
                 value.push(self.current().unwrap());
                 self.pos += 1;
                 col += 1;
-                
+
                 let mut depth = 1;
-                let mut in_sq = false;
-                let mut in_dq = false;
-                
+                let mut in_param_sq = false;
+                let mut in_param_dq = false;
+                let mut single_quote_start_line = ln;
+                let mut single_quote_start_col = col;
+                let mut double_quote_start_line = ln;
+                let mut double_quote_start_col = col;
+
                 while depth > 0 && self.pos < self.input.len() {
                     let ch = self.input[self.pos];
-                    
+
                     // Handle backslash-newline line continuation
                     if ch == '\\' && self.peek(1) == Some('\n') {
                         self.pos += 2;
@@ -1286,8 +1417,8 @@ impl Lexer {
                         col = 1;
                         continue;
                     }
-                    
-                    if ch == '\\' && self.pos + 1 < self.input.len() && !in_sq {
+
+                    if ch == '\\' && self.pos + 1 < self.input.len() && !in_param_sq {
                         value.push(ch);
                         self.pos += 1;
                         col += 1;
@@ -1296,28 +1427,80 @@ impl Lexer {
                         col += 1;
                         continue;
                     }
-                    
+
                     value.push(ch);
-                    
-                    if in_sq {
+
+                    if in_param_sq {
                         if ch == '\'' {
-                            in_sq = false;
+                            in_param_sq = false;
                         }
-                    } else if in_dq {
+                    } else if in_param_dq {
                         if ch == '"' {
-                            in_dq = false;
+                            in_param_dq = false;
                         }
                     } else {
                         match ch {
-                            '\'' => in_sq = true,
-                            '"' => in_dq = true,
+                            '\'' => {
+                                in_param_sq = true;
+                                single_quote_start_line = ln;
+                                single_quote_start_col = col;
+                            }
+                            '"' => {
+                                in_param_dq = true;
+                                double_quote_start_line = ln;
+                                double_quote_start_col = col;
+                            }
                             '{' => depth += 1,
                             '}' => depth -= 1,
                             _ => {}
                         }
                     }
-                    
+
                     if ch == '\n' {
+                        ln += 1;
+                        col = 0;
+                    }
+                    self.pos += 1;
+                    col += 1;
+                }
+
+                // Check for unterminated quotes inside ${...}
+                if in_param_sq {
+                    return Err(LexerError::new(
+                        "unexpected EOF while looking for matching `''",
+                        single_quote_start_line,
+                        single_quote_start_col,
+                    ));
+                }
+                if in_param_dq {
+                    return Err(LexerError::new(
+                        "unexpected EOF while looking for matching `\"'",
+                        double_quote_start_line,
+                        double_quote_start_col,
+                    ));
+                }
+
+                continue;
+            }
+
+            // Handle $[...] old-style arithmetic - consume the entire construct
+            if c == '$' && self.peek(1) == Some('[') && !in_single_quote {
+                value.push(c);
+                self.pos += 1;
+                col += 1;
+                value.push(self.current().unwrap());
+                self.pos += 1;
+                col += 1;
+
+                let mut depth = 1;
+                while depth > 0 && self.pos < self.input.len() {
+                    let ch = self.input[self.pos];
+                    value.push(ch);
+                    if ch == '[' {
+                        depth += 1;
+                    } else if ch == ']' {
+                        depth -= 1;
+                    } else if ch == '\n' {
                         ln += 1;
                         col = 0;
                     }
@@ -1881,6 +2064,117 @@ impl Lexer {
         }
 
         Some(FdVariableResult { varname, end: pos })
+    }
+
+    /// Scan ahead from a $(( position to determine if it should be treated as
+    /// $( ( subshell ) ) instead of $(( arithmetic )).
+    /// This handles cases like:
+    ///   echo $(( echo 1
+    ///   echo 2
+    ///   ) )
+    /// which should be a command substitution containing a subshell, not arithmetic.
+    ///
+    /// @param start_pos - position at the second ( (i.e., at input[start_pos] === "(")
+    /// @returns true if this is a subshell (closes with ) )), false if arithmetic (closes with )))
+    fn dollar_dparen_is_subshell(&self, start_pos: usize) -> bool {
+        let mut pos = start_pos + 1; // Skip the second (
+        let mut depth = 2; // We've seen $((, so we start at depth 2
+        let mut in_single_quote = false;
+        let mut in_double_quote = false;
+        let mut has_newline = false;
+
+        while pos < self.input.len() && depth > 0 {
+            let c = self.input[pos];
+
+            if in_single_quote {
+                if c == '\'' {
+                    in_single_quote = false;
+                }
+                if c == '\n' {
+                    has_newline = true;
+                }
+                pos += 1;
+                continue;
+            }
+
+            if in_double_quote {
+                if c == '\\' && pos + 1 < self.input.len() {
+                    // Skip escaped char
+                    pos += 2;
+                    continue;
+                }
+                if c == '"' {
+                    in_double_quote = false;
+                }
+                if c == '\n' {
+                    has_newline = true;
+                }
+                pos += 1;
+                continue;
+            }
+
+            // Not in quotes
+            match c {
+                '\'' => {
+                    in_single_quote = true;
+                    pos += 1;
+                }
+                '"' => {
+                    in_double_quote = true;
+                    pos += 1;
+                }
+                '\\' if pos + 1 < self.input.len() => {
+                    // Skip escaped char
+                    pos += 2;
+                }
+                '\n' => {
+                    has_newline = true;
+                    pos += 1;
+                }
+                '(' => {
+                    depth += 1;
+                    pos += 1;
+                }
+                ')' => {
+                    depth -= 1;
+                    if depth == 1 {
+                        // We've closed the inner subshell. Check what follows.
+                        let next_pos = pos + 1;
+                        if next_pos < self.input.len() && self.input[next_pos] == ')' {
+                            // )) - adjacent parens = arithmetic
+                            return false;
+                        }
+                        // Check if there's whitespace followed by )
+                        let mut scan_pos = next_pos;
+                        let mut has_whitespace = false;
+                        while scan_pos < self.input.len()
+                            && matches!(self.input.get(scan_pos), Some(' ' | '\t' | '\n'))
+                        {
+                            has_whitespace = true;
+                            scan_pos += 1;
+                        }
+                        if has_whitespace && scan_pos < self.input.len() && self.input[scan_pos] == ')' {
+                            // This is ) ) with whitespace - subshell
+                            return true;
+                        }
+                        // If it has newlines, treat as subshell
+                        if has_newline {
+                            return true;
+                        }
+                    }
+                    if depth == 0 {
+                        return false;
+                    }
+                    pos += 1;
+                }
+                _ => {
+                    pos += 1;
+                }
+            }
+        }
+
+        // Didn't find a definitive answer - default to arithmetic behavior
+        false
     }
 
     /// Add a pending heredoc (used by parser)

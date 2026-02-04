@@ -110,6 +110,133 @@ impl StatementsResult {
     }
 }
 
+/// Error type for statement execution errors.
+#[derive(Debug)]
+pub enum StatementError {
+    Break(BreakError),
+    Continue(ContinueError),
+    Return(ReturnError),
+    Errexit(ErrexitError),
+    Exit(ExitError),
+    ExecutionLimit(ExecutionLimitError),
+    SubshellExit(SubshellExitError),
+    Other { message: String, stdout: String, stderr: String },
+}
+
+impl StatementError {
+    /// Prepend output to the error.
+    pub fn prepend_output(&mut self, stdout: &str, stderr: &str) {
+        match self {
+            StatementError::Break(e) => e.prepend_output(stdout, stderr),
+            StatementError::Continue(e) => e.prepend_output(stdout, stderr),
+            StatementError::Return(e) => e.prepend_output(stdout, stderr),
+            StatementError::Errexit(e) => e.prepend_output(stdout, stderr),
+            StatementError::Exit(e) => e.prepend_output(stdout, stderr),
+            StatementError::ExecutionLimit(e) => e.prepend_output(stdout, stderr),
+            StatementError::SubshellExit(e) => e.prepend_output(stdout, stderr),
+            StatementError::Other { stdout: s, stderr: e, .. } => {
+                *s = format!("{}{}", stdout, s);
+                *e = format!("{}{}", stderr, e);
+            }
+        }
+    }
+
+    /// Check if this is a scope exit error (break, continue, return).
+    pub fn is_scope_exit(&self) -> bool {
+        matches!(
+            self,
+            StatementError::Break(_) | StatementError::Continue(_) | StatementError::Return(_)
+        )
+    }
+}
+
+/// Result type for statement execution.
+pub type StatementResult<T> = Result<T, StatementError>;
+
+/// Execute a list of statements and accumulate their output.
+///
+/// This is a generic version that accepts an executor function.
+/// The executor function should execute a single statement and return its result.
+///
+/// # Arguments
+/// * `statements` - Iterator of statements to execute
+/// * `executor` - Function to execute a single statement
+/// * `initial_stdout` - Initial stdout to prepend
+/// * `initial_stderr` - Initial stderr to prepend
+///
+/// # Returns
+/// Accumulated stdout, stderr, and final exit code, or an error.
+pub fn execute_statements<S, F, E>(
+    statements: impl IntoIterator<Item = S>,
+    mut executor: F,
+    initial_stdout: &str,
+    initial_stderr: &str,
+) -> StatementResult<StatementsResult>
+where
+    F: FnMut(S) -> Result<ExecResult, E>,
+    E: Into<StatementError>,
+{
+    let mut result = StatementsResult::new(
+        initial_stdout.to_string(),
+        initial_stderr.to_string(),
+        0,
+    );
+
+    for stmt in statements {
+        match executor(stmt) {
+            Ok(exec_result) => {
+                result.append(&exec_result);
+            }
+            Err(error) => {
+                let mut stmt_error = error.into();
+                stmt_error.prepend_output(&result.stdout, &result.stderr);
+                return Err(stmt_error);
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+/// Execute statements with error handling that converts unknown errors to results.
+///
+/// Unlike `execute_statements`, this function catches unknown errors and returns
+/// them as a result with exit code 1, rather than propagating them.
+pub fn execute_statements_with_catch<S, F, E>(
+    statements: impl IntoIterator<Item = S>,
+    mut executor: F,
+    initial_stdout: &str,
+    initial_stderr: &str,
+    get_error_message: impl Fn(&E) -> String,
+) -> StatementResult<StatementsResult>
+where
+    F: FnMut(S) -> Result<ExecResult, E>,
+{
+    let mut result = StatementsResult::new(
+        initial_stdout.to_string(),
+        initial_stderr.to_string(),
+        0,
+    );
+
+    for stmt in statements {
+        match executor(stmt) {
+            Ok(exec_result) => {
+                result.append(&exec_result);
+            }
+            Err(error) => {
+                // For unknown errors, append error message to stderr and return
+                let error_msg = get_error_message(&error);
+                result.stderr.push_str(&error_msg);
+                result.stderr.push('\n');
+                result.exit_code = 1;
+                return Ok(result);
+            }
+        }
+    }
+
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

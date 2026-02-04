@@ -3,11 +3,18 @@
 //! Provides helper functions for unquoted expansions that need special handling:
 //! - Unquoted $@ and $* (with and without prefix/suffix)
 //! - Unquoted ${arr[@]} and ${arr[*]}
+//! - Unquoted ${@:offset} and ${*:offset} slicing
+//! - Unquoted ${@#pattern} and ${*#pattern} pattern removal
+//! - Unquoted ${arr[@]/pattern/replacement} pattern replacement
 //! - IFS splitting and glob expansion for unquoted contexts
 
-use crate::interpreter::expansion::{get_array_elements, get_var_names_with_prefix};
+use crate::interpreter::expansion::{
+    apply_pattern_removal, get_array_elements, get_var_names_with_prefix, pattern_to_regex,
+    PatternRemovalSide,
+};
 use crate::interpreter::helpers::{get_ifs, get_ifs_separator, split_by_ifs_for_expansion};
 use crate::interpreter::InterpreterState;
+use regex_lite::Regex;
 
 /// Result type for unquoted expansion handlers.
 #[derive(Debug, Clone)]
@@ -195,6 +202,277 @@ pub fn expand_unquoted_array_keys(
     }
 }
 
+/// Expand unquoted array with pattern removal ${arr[@]#pattern} or ${arr[@]##pattern}.
+pub fn expand_unquoted_array_pattern_removal(
+    state: &InterpreterState,
+    array_name: &str,
+    is_star: bool,
+    pattern_regex: &str,
+    side: PatternRemovalSide,
+    greedy: bool,
+) -> UnquotedExpansionResult {
+    let elements = get_array_elements(state, array_name);
+    let values: Vec<String> = elements.into_iter().map(|(_, v)| v).collect();
+
+    if values.is_empty() {
+        return UnquotedExpansionResult {
+            values: vec![],
+            quoted: false,
+        };
+    }
+
+    // Apply pattern removal to each element
+    let processed: Vec<String> = values
+        .iter()
+        .map(|v| apply_pattern_removal(v, pattern_regex, side, greedy))
+        .collect();
+
+    if is_star {
+        // ${arr[*]#...} - join with IFS first char, then split
+        let ifs_sep = get_ifs_separator(&state.env);
+        let joined = processed.join(ifs_sep);
+        let split_values = split_unquoted_value(&joined, state);
+        UnquotedExpansionResult {
+            values: split_values,
+            quoted: false,
+        }
+    } else {
+        // ${arr[@]#...} - each element is split by IFS
+        let mut result = Vec::new();
+        for value in processed {
+            let split_values = split_unquoted_value(&value, state);
+            result.extend(split_values);
+        }
+        UnquotedExpansionResult {
+            values: result,
+            quoted: false,
+        }
+    }
+}
+
+/// Expand unquoted array with pattern replacement ${arr[@]/pattern/replacement}.
+pub fn expand_unquoted_array_pattern_replacement(
+    state: &InterpreterState,
+    array_name: &str,
+    is_star: bool,
+    pattern_regex: &str,
+    replacement: &str,
+    replace_all: bool,
+    anchor_start: bool,
+    anchor_end: bool,
+) -> UnquotedExpansionResult {
+    let elements = get_array_elements(state, array_name);
+    let values: Vec<String> = elements.into_iter().map(|(_, v)| v).collect();
+
+    if values.is_empty() {
+        return UnquotedExpansionResult {
+            values: vec![],
+            quoted: false,
+        };
+    }
+
+    // Build final pattern with anchors
+    let final_pattern = if anchor_start {
+        format!("^{}", pattern_regex)
+    } else if anchor_end {
+        format!("{}$", pattern_regex)
+    } else {
+        pattern_regex.to_string()
+    };
+
+    // Apply pattern replacement to each element
+    let processed: Vec<String> = match Regex::new(&final_pattern) {
+        Ok(re) => values
+            .iter()
+            .map(|v| {
+                if replace_all {
+                    re.replace_all(v, replacement).to_string()
+                } else {
+                    re.replace(v, replacement).to_string()
+                }
+            })
+            .collect(),
+        Err(_) => values,
+    };
+
+    if is_star {
+        // ${arr[*]/...} - join with IFS first char, then split
+        let ifs_sep = get_ifs_separator(&state.env);
+        let joined = processed.join(ifs_sep);
+        let split_values = split_unquoted_value(&joined, state);
+        UnquotedExpansionResult {
+            values: split_values,
+            quoted: false,
+        }
+    } else {
+        // ${arr[@]/...} - each element is split by IFS
+        let mut result = Vec::new();
+        for value in processed {
+            let split_values = split_unquoted_value(&value, state);
+            result.extend(split_values);
+        }
+        UnquotedExpansionResult {
+            values: result,
+            quoted: false,
+        }
+    }
+}
+
+/// Expand unquoted positional parameters with slicing ${@:offset} or ${*:offset}.
+pub fn expand_unquoted_positional_slice(
+    state: &InterpreterState,
+    is_star: bool,
+    offset: i64,
+    length: Option<i64>,
+) -> UnquotedExpansionResult {
+    let num_params: i32 = state
+        .env
+        .get("#")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
+    if num_params == 0 {
+        return UnquotedExpansionResult {
+            values: vec![],
+            quoted: false,
+        };
+    }
+
+    let mut params = Vec::new();
+    for i in 1..=num_params {
+        params.push(state.env.get(&i.to_string()).cloned().unwrap_or_default());
+    }
+
+    // Calculate start position
+    let start = if offset < 0 {
+        let computed = params.len() as i64 + offset;
+        if computed < 0 { 0 } else { computed as usize }
+    } else {
+        offset as usize
+    };
+
+    // Calculate end position
+    let end = match length {
+        Some(len) if len < 0 => {
+            let computed = params.len() as i64 + len;
+            if computed < start as i64 {
+                return UnquotedExpansionResult {
+                    values: vec![],
+                    quoted: false,
+                };
+            }
+            computed as usize
+        }
+        Some(len) => (start + len as usize).min(params.len()),
+        None => params.len(),
+    };
+
+    if start >= params.len() {
+        return UnquotedExpansionResult {
+            values: vec![],
+            quoted: false,
+        };
+    }
+
+    let sliced: Vec<String> = params[start..end].to_vec();
+
+    if is_star {
+        // ${*:offset} - join with IFS first char, then split
+        let ifs_sep = get_ifs_separator(&state.env);
+        let joined = sliced.join(ifs_sep);
+        let split_values = split_unquoted_value(&joined, state);
+        UnquotedExpansionResult {
+            values: split_values,
+            quoted: false,
+        }
+    } else {
+        // ${@:offset} - each parameter is split by IFS
+        let mut result = Vec::new();
+        for param in sliced {
+            let split_values = split_unquoted_value(&param, state);
+            result.extend(split_values);
+        }
+        UnquotedExpansionResult {
+            values: result,
+            quoted: false,
+        }
+    }
+}
+
+/// Expand unquoted array with slicing ${arr[@]:offset} or ${arr[@]:offset:length}.
+pub fn expand_unquoted_array_slice(
+    state: &InterpreterState,
+    array_name: &str,
+    is_star: bool,
+    offset: i64,
+    length: Option<i64>,
+) -> UnquotedExpansionResult {
+    let elements = get_array_elements(state, array_name);
+    let values: Vec<String> = elements.into_iter().map(|(_, v)| v).collect();
+
+    if values.is_empty() {
+        return UnquotedExpansionResult {
+            values: vec![],
+            quoted: false,
+        };
+    }
+
+    // Calculate start position
+    let start = if offset < 0 {
+        let computed = values.len() as i64 + offset;
+        if computed < 0 { 0 } else { computed as usize }
+    } else {
+        offset as usize
+    };
+
+    // Calculate end position
+    let end = match length {
+        Some(len) if len < 0 => {
+            let computed = values.len() as i64 + len;
+            if computed < start as i64 {
+                return UnquotedExpansionResult {
+                    values: vec![],
+                    quoted: false,
+                };
+            }
+            computed as usize
+        }
+        Some(len) => (start + len as usize).min(values.len()),
+        None => values.len(),
+    };
+
+    if start >= values.len() {
+        return UnquotedExpansionResult {
+            values: vec![],
+            quoted: false,
+        };
+    }
+
+    let sliced: Vec<String> = values[start..end].to_vec();
+
+    if is_star {
+        // ${arr[*]:offset} - join with IFS first char, then split
+        let ifs_sep = get_ifs_separator(&state.env);
+        let joined = sliced.join(ifs_sep);
+        let split_values = split_unquoted_value(&joined, state);
+        UnquotedExpansionResult {
+            values: split_values,
+            quoted: false,
+        }
+    } else {
+        // ${arr[@]:offset} - each element is split by IFS
+        let mut result = Vec::new();
+        for value in sliced {
+            let split_values = split_unquoted_value(&value, state);
+            result.extend(split_values);
+        }
+        UnquotedExpansionResult {
+            values: result,
+            quoted: false,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,5 +543,41 @@ mod tests {
         let result = expand_unquoted_var_name_prefix(&state, "P", false);
         assert!(result.values.contains(&"PATH".to_string()));
         assert!(result.values.contains(&"PWD".to_string()));
+    }
+
+    #[test]
+    fn test_expand_unquoted_array_pattern_removal() {
+        let state = make_state_with_array("arr", &["hello", "world"]);
+        let regex = pattern_to_regex("h*", false, false);
+        let result = expand_unquoted_array_pattern_removal(
+            &state,
+            "arr",
+            false,
+            &regex,
+            PatternRemovalSide::Prefix,
+            false,
+        );
+        // "hello" -> "ello", "world" -> "world"
+        assert_eq!(result.values, vec!["ello", "world"]);
+    }
+
+    #[test]
+    fn test_expand_unquoted_array_slice() {
+        let state = make_state_with_array("arr", &["a", "b", "c", "d"]);
+        let result = expand_unquoted_array_slice(&state, "arr", false, 1, Some(2));
+        assert_eq!(result.values, vec!["b", "c"]);
+    }
+
+    #[test]
+    fn test_expand_unquoted_positional_slice() {
+        let mut state = InterpreterState::default();
+        state.env.insert("#".to_string(), "4".to_string());
+        state.env.insert("1".to_string(), "a".to_string());
+        state.env.insert("2".to_string(), "b".to_string());
+        state.env.insert("3".to_string(), "c".to_string());
+        state.env.insert("4".to_string(), "d".to_string());
+
+        let result = expand_unquoted_positional_slice(&state, false, 1, Some(2));
+        assert_eq!(result.values, vec!["b", "c"]);
     }
 }

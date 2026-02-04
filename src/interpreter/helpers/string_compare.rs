@@ -66,6 +66,72 @@ pub fn compare_strings_str(op: &str, left: &str, right: &str) -> Option<bool> {
     StringCompareOp::from_str(op).map(|op| compare_strings(op, left, right))
 }
 
+/// Compare two strings with pattern matching support.
+///
+/// # Arguments
+/// * `op` - The comparison operator
+/// * `left` - Left operand (the string to match)
+/// * `right` - Right operand (the pattern when use_pattern is true)
+/// * `use_pattern` - If true, use glob pattern matching for equality
+/// * `nocasematch` - If true, use case-insensitive comparison
+/// * `extglob` - If true, enable extended glob patterns (requires pattern_matcher)
+/// * `pattern_matcher` - Optional function to perform pattern matching
+///
+/// When `use_pattern` is true and `pattern_matcher` is provided, the right operand
+/// is treated as a glob pattern. Otherwise, literal comparison is used.
+pub fn compare_strings_with_pattern<F>(
+    op: StringCompareOp,
+    left: &str,
+    right: &str,
+    use_pattern: bool,
+    nocasematch: bool,
+    _extglob: bool,
+    pattern_matcher: Option<F>,
+) -> bool
+where
+    F: Fn(&str, &str, bool) -> bool,
+{
+    let is_equal = if use_pattern {
+        if let Some(matcher) = pattern_matcher {
+            matcher(left, right, nocasematch)
+        } else {
+            // Fallback to literal comparison if no pattern matcher provided
+            if nocasematch {
+                left.eq_ignore_ascii_case(right)
+            } else {
+                left == right
+            }
+        }
+    } else if nocasematch {
+        left.eq_ignore_ascii_case(right)
+    } else {
+        left == right
+    };
+
+    match op {
+        StringCompareOp::Eq => is_equal,
+        StringCompareOp::Ne => !is_equal,
+    }
+}
+
+/// Compare two strings with pattern matching using string operator.
+pub fn compare_strings_with_pattern_str<F>(
+    op: &str,
+    left: &str,
+    right: &str,
+    use_pattern: bool,
+    nocasematch: bool,
+    extglob: bool,
+    pattern_matcher: Option<F>,
+) -> Option<bool>
+where
+    F: Fn(&str, &str, bool) -> bool,
+{
+    StringCompareOp::from_str(op).map(|op| {
+        compare_strings_with_pattern(op, left, right, use_pattern, nocasematch, extglob, pattern_matcher)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

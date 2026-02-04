@@ -182,6 +182,30 @@ pub fn format_timing_output(elapsed_seconds: f64, posix_format: bool) -> String 
     }
 }
 
+/// Check if a command runs in a subshell context within a pipeline.
+///
+/// In bash, all commands except the last run in subshells.
+/// With lastpipe enabled, the last command runs in the current shell.
+pub fn runs_in_subshell(
+    command_count: usize,
+    command_index: usize,
+    lastpipe_enabled: bool,
+) -> bool {
+    let is_multi_command = command_count > 1;
+    let is_last = command_index == command_count - 1;
+    is_multi_command && (!is_last || !lastpipe_enabled)
+}
+
+/// Determine if PIPESTATUS should be set for a pipeline.
+///
+/// For single-command pipelines with compound commands, don't set PIPESTATUS -
+/// let inner statements set it (e.g., non-matching case statements should leave
+/// PIPESTATUS unchanged, matching bash behavior).
+/// For multi-command pipelines or simple commands, always set PIPESTATUS.
+pub fn should_set_pipestatus(command_count: usize, is_simple_command: bool) -> bool {
+    command_count > 1 || (command_count == 1 && is_simple_command)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,5 +331,47 @@ mod tests {
         assert!(output.contains("real\t1m5.123s"));
         assert!(output.contains("user\t0m0.000s"));
         assert!(output.contains("sys\t0m0.000s"));
+    }
+
+    #[test]
+    fn test_runs_in_subshell() {
+        // Single command pipeline - never runs in subshell
+        assert!(!runs_in_subshell(1, 0, false));
+        assert!(!runs_in_subshell(1, 0, true));
+
+        // Multi-command pipeline without lastpipe
+        // First command runs in subshell
+        assert!(runs_in_subshell(2, 0, false));
+        // Last command also runs in subshell (no lastpipe)
+        assert!(runs_in_subshell(2, 1, false));
+
+        // Multi-command pipeline with lastpipe
+        // First command runs in subshell
+        assert!(runs_in_subshell(2, 0, true));
+        // Last command runs in current shell (lastpipe enabled)
+        assert!(!runs_in_subshell(2, 1, true));
+
+        // Three command pipeline
+        assert!(runs_in_subshell(3, 0, false));
+        assert!(runs_in_subshell(3, 1, false));
+        assert!(runs_in_subshell(3, 2, false));
+        assert!(runs_in_subshell(3, 0, true));
+        assert!(runs_in_subshell(3, 1, true));
+        assert!(!runs_in_subshell(3, 2, true));
+    }
+
+    #[test]
+    fn test_should_set_pipestatus() {
+        // Multi-command pipeline - always set PIPESTATUS
+        assert!(should_set_pipestatus(2, true));
+        assert!(should_set_pipestatus(2, false));
+        assert!(should_set_pipestatus(3, true));
+        assert!(should_set_pipestatus(3, false));
+
+        // Single simple command - set PIPESTATUS
+        assert!(should_set_pipestatus(1, true));
+
+        // Single compound command - don't set PIPESTATUS
+        assert!(!should_set_pipestatus(1, false));
     }
 }

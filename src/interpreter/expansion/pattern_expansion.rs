@@ -243,6 +243,272 @@ pub fn expand_variables_in_pattern(state: &InterpreterState, pattern: &str) -> S
     result
 }
 
+/// Result of pattern expansion with command substitution.
+#[derive(Debug, Clone, Default)]
+pub struct PatternExpansionResult {
+    pub value: String,
+    pub stderr: String,
+}
+
+/// Expand variables within a double-quoted string inside a pattern with command substitution support.
+fn expand_variables_in_double_quoted_pattern_with_exec<F>(
+    state: &InterpreterState,
+    content: &str,
+    exec_fn: &Option<F>,
+) -> PatternExpansionResult
+where
+    F: Fn(&str) -> (String, String, i32), // (stdout, stderr, exit_code)
+{
+    let mut result = String::new();
+    let mut stderr = String::new();
+    let chars: Vec<char> = content.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        let c = chars[i];
+
+        // Handle backslash escapes
+        if c == '\\' && i + 1 < chars.len() {
+            let next = chars[i + 1];
+            // In double quotes, only $, `, \, ", and newline are special after \
+            if next == '$' || next == '`' || next == '\\' || next == '"' {
+                result.push(next);
+                i += 2;
+                continue;
+            }
+            // Other escapes pass through as-is
+            result.push(c);
+            i += 1;
+            continue;
+        }
+
+        // Handle command substitution: $(...)
+        if c == '$' && i + 1 < chars.len() && chars[i + 1] == '(' {
+            let rest: String = chars[i + 2..].iter().collect();
+            if let Some(close_idx) = find_command_substitution_end(&rest, 0) {
+                let cmd_str: String = chars[i + 2..i + 2 + close_idx].iter().collect();
+                if let Some(ref exec) = exec_fn {
+                    let (stdout, cmd_stderr, _) = exec(&cmd_str);
+                    result.push_str(stdout.trim_end_matches('\n'));
+                    if !cmd_stderr.is_empty() {
+                        stderr.push_str(&cmd_stderr);
+                    }
+                } else {
+                    // Keep as-is if no exec function
+                    let segment: String = chars[i..i + 2 + close_idx + 1].iter().collect();
+                    result.push_str(&segment);
+                }
+                i = i + 2 + close_idx + 1;
+                continue;
+            }
+        }
+
+        // Handle backtick command substitution: `...`
+        if c == '`' {
+            let rest: String = chars[i + 1..].iter().collect();
+            if let Some(close_idx) = rest.find('`') {
+                let cmd_str: String = chars[i + 1..i + 1 + close_idx].iter().collect();
+                if let Some(ref exec) = exec_fn {
+                    let (stdout, cmd_stderr, _) = exec(&cmd_str);
+                    result.push_str(stdout.trim_end_matches('\n'));
+                    if !cmd_stderr.is_empty() {
+                        stderr.push_str(&cmd_stderr);
+                    }
+                } else {
+                    // Keep as-is if no exec function
+                    let segment: String = chars[i..i + 1 + close_idx + 1].iter().collect();
+                    result.push_str(&segment);
+                }
+                i = i + 1 + close_idx + 1;
+                continue;
+            }
+        }
+
+        // Handle variable references: $var or ${var}
+        if c == '$' && i + 1 < chars.len() {
+            let next = chars[i + 1];
+            if next == '{' {
+                // ${var} form - find matching }
+                let rest: String = chars[i + 2..].iter().collect();
+                if let Some(close_idx) = rest.find('}') {
+                    let var_name: String = chars[i + 2..i + 2 + close_idx].iter().collect();
+                    result.push_str(state.env.get(&var_name).map(|s| s.as_str()).unwrap_or(""));
+                    i = i + 2 + close_idx + 1;
+                    continue;
+                }
+            } else if next.is_ascii_alphabetic() || next == '_' {
+                // $var form - read variable name
+                let mut end = i + 1;
+                while end < chars.len() && (chars[end].is_ascii_alphanumeric() || chars[end] == '_')
+                {
+                    end += 1;
+                }
+                let var_name: String = chars[i + 1..end].iter().collect();
+                result.push_str(state.env.get(&var_name).map(|s| s.as_str()).unwrap_or(""));
+                i = end;
+                continue;
+            }
+        }
+
+        // All other characters pass through unchanged
+        result.push(c);
+        i += 1;
+    }
+
+    PatternExpansionResult { value: result, stderr }
+}
+
+/// Expand variables within a glob/extglob pattern string with command substitution support.
+/// This handles patterns like @($var|$(echo foo)) where command substitutions need expansion.
+///
+/// # Arguments
+/// * `state` - The interpreter state
+/// * `pattern` - The pattern string to expand
+/// * `exec_fn` - Optional function to execute command substitutions
+///
+/// # Returns
+/// The expanded pattern and any stderr output.
+pub fn expand_variables_in_pattern_with_exec<F>(
+    state: &InterpreterState,
+    pattern: &str,
+    exec_fn: Option<F>,
+) -> PatternExpansionResult
+where
+    F: Fn(&str) -> (String, String, i32), // (stdout, stderr, exit_code)
+{
+    let mut result = String::new();
+    let mut stderr = String::new();
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        let c = chars[i];
+
+        // Handle single-quoted strings - content is literal, strip quotes, escape glob chars
+        if c == '\'' {
+            let rest: String = chars[i + 1..].iter().collect();
+            if let Some(close_idx) = rest.find('\'') {
+                let content: String = chars[i + 1..i + 1 + close_idx].iter().collect();
+                // Escape glob metacharacters so they match literally
+                result.push_str(&escape_glob_chars(&content));
+                i = i + 1 + close_idx + 1;
+                continue;
+            }
+        }
+
+        // Handle double-quoted strings - expand variables inside, strip quotes, escape glob chars
+        if c == '"' {
+            // Find matching close quote, handling escapes
+            let mut close_idx = None;
+            let mut j = i + 1;
+            while j < chars.len() {
+                if chars[j] == '\\' {
+                    j += 2; // Skip escaped char
+                    continue;
+                }
+                if chars[j] == '"' {
+                    close_idx = Some(j);
+                    break;
+                }
+                j += 1;
+            }
+            if let Some(close) = close_idx {
+                let content: String = chars[i + 1..close].iter().collect();
+                // Recursively expand (including command substitutions) in the double-quoted content
+                let expanded = expand_variables_in_double_quoted_pattern_with_exec(state, &content, &exec_fn);
+                stderr.push_str(&expanded.stderr);
+                // Escape glob metacharacters so they match literally
+                result.push_str(&escape_glob_chars(&expanded.value));
+                i = close + 1;
+                continue;
+            }
+        }
+
+        // Handle command substitution: $(...)
+        if c == '$' && i + 1 < chars.len() && chars[i + 1] == '(' {
+            let rest: String = chars[i + 2..].iter().collect();
+            if let Some(close_idx) = find_command_substitution_end(&rest, 0) {
+                let cmd_str: String = chars[i + 2..i + 2 + close_idx].iter().collect();
+                if let Some(ref exec) = exec_fn {
+                    let (stdout, cmd_stderr, _) = exec(&cmd_str);
+                    result.push_str(stdout.trim_end_matches('\n'));
+                    if !cmd_stderr.is_empty() {
+                        stderr.push_str(&cmd_stderr);
+                    }
+                } else {
+                    // Keep as-is if no exec function
+                    let segment: String = chars[i..i + 2 + close_idx + 1].iter().collect();
+                    result.push_str(&segment);
+                }
+                i = i + 2 + close_idx + 1;
+                continue;
+            }
+        }
+
+        // Handle backtick command substitution: `...`
+        if c == '`' {
+            let rest: String = chars[i + 1..].iter().collect();
+            if let Some(close_idx) = rest.find('`') {
+                let cmd_str: String = chars[i + 1..i + 1 + close_idx].iter().collect();
+                if let Some(ref exec) = exec_fn {
+                    let (stdout, cmd_stderr, _) = exec(&cmd_str);
+                    result.push_str(stdout.trim_end_matches('\n'));
+                    if !cmd_stderr.is_empty() {
+                        stderr.push_str(&cmd_stderr);
+                    }
+                } else {
+                    // Keep as-is if no exec function
+                    let segment: String = chars[i..i + 1 + close_idx + 1].iter().collect();
+                    result.push_str(&segment);
+                }
+                i = i + 1 + close_idx + 1;
+                continue;
+            }
+        }
+
+        // Handle variable references: $var or ${var}
+        if c == '$' && i + 1 < chars.len() {
+            let next = chars[i + 1];
+            if next == '{' {
+                // ${var} form - find matching }
+                let rest: String = chars[i + 2..].iter().collect();
+                if let Some(close_idx) = rest.find('}') {
+                    let var_name: String = chars[i + 2..i + 2 + close_idx].iter().collect();
+                    // Simple variable expansion (no complex operations)
+                    result.push_str(state.env.get(&var_name).map(|s| s.as_str()).unwrap_or(""));
+                    i = i + 2 + close_idx + 1;
+                    continue;
+                }
+            } else if next.is_ascii_alphabetic() || next == '_' {
+                // $var form - read variable name
+                let mut end = i + 1;
+                while end < chars.len() && (chars[end].is_ascii_alphanumeric() || chars[end] == '_')
+                {
+                    end += 1;
+                }
+                let var_name: String = chars[i + 1..end].iter().collect();
+                result.push_str(state.env.get(&var_name).map(|s| s.as_str()).unwrap_or(""));
+                i = end;
+                continue;
+            }
+        }
+
+        // Handle backslash escapes - preserve them
+        if c == '\\' && i + 1 < chars.len() {
+            result.push(c);
+            result.push(chars[i + 1]);
+            i += 2;
+            continue;
+        }
+
+        // All other characters pass through unchanged
+        result.push(c);
+        i += 1;
+    }
+
+    PatternExpansionResult { value: result, stderr }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -285,5 +551,45 @@ mod tests {
         assert_eq!(find_command_substitution_end("echo foo)", 0), Some(8));
         assert_eq!(find_command_substitution_end("echo (nested))", 0), Some(13));
         assert_eq!(find_command_substitution_end("unclosed", 0), None);
+    }
+
+    #[test]
+    fn test_expand_variables_in_pattern_with_exec() {
+        let state = make_state();
+        // With exec function that returns "hello"
+        let exec_fn = |_cmd: &str| ("hello\n".to_string(), String::new(), 0);
+        let result = expand_variables_in_pattern_with_exec(&state, "$(echo hello)", Some(exec_fn));
+        assert_eq!(result.value, "hello");
+        assert!(result.stderr.is_empty());
+    }
+
+    #[test]
+    fn test_expand_variables_in_pattern_with_exec_backtick() {
+        let state = make_state();
+        // With exec function for backtick
+        let exec_fn = |_cmd: &str| ("world\n".to_string(), String::new(), 0);
+        let result = expand_variables_in_pattern_with_exec(&state, "`echo world`", Some(exec_fn));
+        assert_eq!(result.value, "world");
+    }
+
+    #[test]
+    fn test_expand_variables_in_pattern_without_exec() {
+        let state = make_state();
+        // Without exec function - command substitution kept as-is
+        let result = expand_variables_in_pattern_with_exec::<fn(&str) -> (String, String, i32)>(
+            &state,
+            "$(echo hello)",
+            None,
+        );
+        assert_eq!(result.value, "$(echo hello)");
+    }
+
+    #[test]
+    fn test_expand_variables_in_pattern_mixed() {
+        let state = make_state();
+        // Mix of variables and command substitution
+        let exec_fn = |_cmd: &str| ("cmd_output\n".to_string(), String::new(), 0);
+        let result = expand_variables_in_pattern_with_exec(&state, "@($foo|$(cmd))", Some(exec_fn));
+        assert_eq!(result.value, "@(bar|cmd_output)");
     }
 }

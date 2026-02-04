@@ -395,6 +395,51 @@ pub fn handle_scalar_default_with_array(
     })
 }
 
+/// Check if array assign default should be applied.
+/// Returns (should_assign, array_name, current_values) where:
+/// - should_assign: true if the default value should be assigned
+/// - array_name: the target array name for assignment
+/// - current_values: the current array values
+pub fn check_array_assign_default(
+    state: &InterpreterState,
+    array_name: &str,
+    is_star: bool,
+    check_empty: bool,
+) -> (bool, ArrayPrefixSuffixResult) {
+    let elements = get_array_elements(state, array_name);
+    let is_set = !elements.is_empty() || state.env.contains_key(array_name);
+    let is_empty = elements.is_empty()
+        || (elements.len() == 1 && elements.iter().all(|(_, v)| v.is_empty()));
+
+    let should_assign = !is_set || (check_empty && is_empty);
+
+    let values: Vec<String> = elements.into_iter().map(|(_, v)| v).collect();
+    let result = if is_star {
+        let ifs_sep = get_ifs_separator(&state.env);
+        ArrayPrefixSuffixResult {
+            values: vec![values.join(ifs_sep)],
+            quoted: true,
+        }
+    } else {
+        ArrayPrefixSuffixResult {
+            values,
+            quoted: true,
+        }
+    };
+
+    (should_assign, result)
+}
+
+/// Parse array subscript from parameter name.
+/// Returns (array_name, is_star) if it matches, None otherwise.
+pub fn parse_array_subscript(parameter: &str) -> Option<(String, bool)> {
+    let re = Regex::new(r"^([a-zA-Z_][a-zA-Z0-9_]*)\[([@*])\]$").ok()?;
+    let caps = re.captures(parameter)?;
+    let array_name = caps.get(1)?.as_str().to_string();
+    let is_star = caps.get(2)?.as_str() == "*";
+    Some((array_name, is_star))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -462,5 +507,38 @@ mod tests {
         // "hello" -> "" (h*o matches "hello"), "world" -> "world", "foo" -> "foo"
         // With prefix/suffix: ["pre-", "world", "foo-suf"]
         assert_eq!(result.values, vec!["pre-", "world", "foo-suf"]);
+    }
+
+    #[test]
+    fn test_check_array_assign_default_unset() {
+        let state = InterpreterState {
+            env: HashMap::new(),
+            ..Default::default()
+        };
+        let (should_assign, result) = check_array_assign_default(&state, "unset", false, false);
+        assert!(should_assign);
+        assert!(result.values.is_empty());
+    }
+
+    #[test]
+    fn test_check_array_assign_default_set() {
+        let state = make_state();
+        let (should_assign, result) = check_array_assign_default(&state, "arr", false, false);
+        assert!(!should_assign);
+        assert_eq!(result.values, vec!["hello", "world", "foo"]);
+    }
+
+    #[test]
+    fn test_parse_array_subscript() {
+        assert_eq!(
+            parse_array_subscript("arr[@]"),
+            Some(("arr".to_string(), false))
+        );
+        assert_eq!(
+            parse_array_subscript("arr[*]"),
+            Some(("arr".to_string(), true))
+        );
+        assert_eq!(parse_array_subscript("arr"), None);
+        assert_eq!(parse_array_subscript("arr[0]"), None);
     }
 }

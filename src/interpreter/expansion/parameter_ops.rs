@@ -240,6 +240,284 @@ pub fn get_var_names_with_prefix_op(
     }
 }
 
+// ============================================================================
+// Higher-level operation handlers with callback support
+// ============================================================================
+
+/// Handle DefaultValue operation: ${param:-word}
+/// Returns the default value if the variable is unset (or empty if check_empty is true).
+pub fn handle_default_value<F>(
+    op_ctx: &ParameterOpContext,
+    check_empty: bool,
+    expand_default: F,
+) -> String
+where
+    F: FnOnce() -> String,
+{
+    if should_use_default(op_ctx, check_empty) {
+        expand_default()
+    } else {
+        op_ctx.effective_value.clone()
+    }
+}
+
+/// Handle AssignDefault operation: ${param:=word}
+/// Assigns and returns the default value if the variable is unset (or empty if check_empty is true).
+///
+/// # Arguments
+/// * `op_ctx` - Parameter operation context
+/// * `parameter` - The parameter name (may include array subscript)
+/// * `check_empty` - Whether to also check for empty value
+/// * `expand_default` - Function to expand the default word
+/// * `assign_var` - Function to assign the value to the variable
+pub fn handle_assign_default<F, A>(
+    op_ctx: &ParameterOpContext,
+    parameter: &str,
+    check_empty: bool,
+    expand_default: F,
+    assign_var: A,
+) -> String
+where
+    F: FnOnce() -> String,
+    A: FnOnce(&str, &str),
+{
+    if should_use_default(op_ctx, check_empty) {
+        let default_value = expand_default();
+        assign_var(parameter, &default_value);
+        default_value
+    } else {
+        op_ctx.effective_value.clone()
+    }
+}
+
+/// Error result for ErrorIfUnset operation
+#[derive(Debug, Clone)]
+pub struct ErrorIfUnsetResult {
+    pub value: Option<String>,
+    pub error_message: Option<String>,
+}
+
+/// Handle ErrorIfUnset operation: ${param:?word}
+/// Returns an error if the variable is unset (or empty if check_empty is true).
+pub fn handle_error_if_unset<F>(
+    op_ctx: &ParameterOpContext,
+    parameter: &str,
+    check_empty: bool,
+    expand_message: Option<F>,
+) -> ErrorIfUnsetResult
+where
+    F: FnOnce() -> String,
+{
+    let should_error = op_ctx.is_unset || (check_empty && op_ctx.is_empty);
+    if should_error {
+        let message = if let Some(expand_fn) = expand_message {
+            expand_fn()
+        } else {
+            format!("{}: parameter null or not set", parameter)
+        };
+        ErrorIfUnsetResult {
+            value: None,
+            error_message: Some(format!("bash: {}\n", message)),
+        }
+    } else {
+        ErrorIfUnsetResult {
+            value: Some(op_ctx.effective_value.clone()),
+            error_message: None,
+        }
+    }
+}
+
+/// Handle UseAlternative operation: ${param:+word}
+/// Returns the alternative value if the variable is set (and non-empty if check_empty is true).
+pub fn handle_use_alternative<F>(
+    op_ctx: &ParameterOpContext,
+    check_empty: bool,
+    expand_alternative: F,
+) -> String
+where
+    F: FnOnce() -> String,
+{
+    if should_use_alternative(op_ctx, check_empty) {
+        expand_alternative()
+    } else {
+        String::new()
+    }
+}
+
+/// Handle Indirection operation: ${!param}
+/// Returns the value of the variable whose name is stored in param.
+pub fn handle_indirection(
+    state: &InterpreterState,
+    parameter: &str,
+) -> Result<String, String> {
+    let target_name = get_variable(state, parameter);
+
+    if target_name.is_empty() {
+        return Ok(String::new());
+    }
+
+    // Validate target name
+    let valid_name_re = Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_]*(\[.+\])?$").unwrap();
+    if !valid_name_re.is_match(&target_name) {
+        return Err(format!("bash: ${{{}}}: bad substitution", parameter));
+    }
+
+    Ok(get_variable(state, &target_name))
+}
+
+/// Handle Length operation with special cases: ${#param}
+/// For arrays, returns the number of elements.
+/// For strings, returns the character count.
+/// Handles special cases like FUNCNAME and BASH_LINENO.
+pub fn get_parameter_length_extended(
+    state: &InterpreterState,
+    parameter: &str,
+    is_array_subscript: bool,
+) -> usize {
+    // Check for array subscript
+    let array_re = Regex::new(r"^([a-zA-Z_][a-zA-Z0-9_]*)\[([@*])\]$").unwrap();
+    if let Some(caps) = array_re.captures(parameter) {
+        let array_name = caps.get(1).unwrap().as_str();
+        let elements = get_array_elements(state, array_name);
+        return elements.len();
+    }
+
+    // Check for scalar variable with array subscript syntax (returns 1 if set)
+    if is_array_subscript {
+        let value = get_variable(state, parameter);
+        if !value.is_empty() {
+            return 1;
+        }
+        return 0;
+    }
+
+    // Regular variable - return string length
+    let value = get_variable(state, parameter);
+    value.chars().count()
+}
+
+/// Apply substring extraction with array support.
+/// For arrays, applies to each element.
+pub fn apply_substring_to_array(
+    elements: &[(String, String)],
+    offset: i64,
+    length: Option<i64>,
+) -> Result<Vec<String>, String> {
+    let mut results = Vec::new();
+    for (_, value) in elements {
+        results.push(apply_substring_op(value, offset, length)?);
+    }
+    Ok(results)
+}
+
+/// Apply case modification to array elements.
+pub fn apply_case_modification_to_array(
+    elements: &[(String, String)],
+    operator: &str,
+    pattern: Option<&str>,
+) -> Vec<String> {
+    elements
+        .iter()
+        .map(|(_, value)| {
+            if let Some(_pat) = pattern {
+                // Pattern-based case modification (e.g., ${var^^[aeiou]})
+                // For now, apply to all characters matching the pattern
+                // This is a simplified implementation
+                apply_case_modification(value, operator)
+            } else {
+                apply_case_modification(value, operator)
+            }
+        })
+        .collect()
+}
+
+/// Apply transform operation with additional operators.
+/// Supports: Q, P, a, A, E, K, k, u, U, L
+pub fn apply_transform_op_extended(
+    state: &InterpreterState,
+    parameter: &str,
+    value: &str,
+    operator: &str,
+) -> String {
+    match operator {
+        "Q" => quote_value(value),
+        "P" => expand_prompt(state, value),
+        "a" => get_variable_attributes(state, parameter),
+        "A" => {
+            // Assignment format: declare -a name='(values)' or name='value'
+            let attrs = get_variable_attributes(state, parameter);
+            if attrs.contains('a') || attrs.contains('A') {
+                let elements = get_array_elements(state, parameter);
+                let values: Vec<String> = elements.iter().map(|(_, v)| format!("\"{}\"", v)).collect();
+                format!("declare -{} {}=({})", attrs, parameter, values.join(" "))
+            } else {
+                format!("declare -{} {}=\"{}\"", attrs, parameter, value)
+            }
+        }
+        "E" => {
+            // Escape expansion (like $'...')
+            // Process escape sequences
+            let mut result = String::new();
+            let mut chars = value.chars().peekable();
+            while let Some(c) = chars.next() {
+                if c == '\\' {
+                    match chars.next() {
+                        Some('n') => result.push('\n'),
+                        Some('t') => result.push('\t'),
+                        Some('r') => result.push('\r'),
+                        Some('\\') => result.push('\\'),
+                        Some('\'') => result.push('\''),
+                        Some('"') => result.push('"'),
+                        Some('a') => result.push('\x07'),
+                        Some('b') => result.push('\x08'),
+                        Some('e') | Some('E') => result.push('\x1b'),
+                        Some('f') => result.push('\x0c'),
+                        Some('v') => result.push('\x0b'),
+                        Some(other) => {
+                            result.push('\\');
+                            result.push(other);
+                        }
+                        None => result.push('\\'),
+                    }
+                } else {
+                    result.push(c);
+                }
+            }
+            result
+        }
+        "K" | "k" => {
+            // Quoted key-value format for associative arrays
+            // K: "key" "value", k: key value
+            let elements = get_array_elements(state, parameter);
+            let pairs: Vec<String> = elements
+                .iter()
+                .map(|(idx, val)| {
+                    let key = match idx {
+                        crate::interpreter::expansion::ArrayIndex::Numeric(n) => n.to_string(),
+                        crate::interpreter::expansion::ArrayIndex::String(s) => s.clone(),
+                    };
+                    if operator == "K" {
+                        format!("\"{}\" \"{}\"", key, val)
+                    } else {
+                        format!("{} {}", key, val)
+                    }
+                })
+                .collect();
+            pairs.join(" ")
+        }
+        "u" => {
+            let mut chars = value.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(c) => c.to_uppercase().to_string() + chars.as_str(),
+            }
+        }
+        "U" => value.to_uppercase(),
+        "L" => value.to_lowercase(),
+        _ => value.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

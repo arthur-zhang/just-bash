@@ -1195,6 +1195,24 @@ impl Parser {
             self.skip_separators(true);
         }
 
+        // Empty body is a syntax error in bash
+        if then_body.is_empty() {
+            let next_tok = if self.check(&[TokenType::Fi]) {
+                "fi"
+            } else if self.check(&[TokenType::Else]) {
+                "else"
+            } else if self.check(&[TokenType::Elif]) {
+                "elif"
+            } else {
+                "fi"
+            };
+            return Err(ParseException::new(
+                &format!("syntax error near unexpected token `{}'", next_tok),
+                self.current().line,
+                self.current().column,
+            ));
+        }
+
         let mut clauses = vec![crate::ast::types::IfClause {
             condition,
             body: then_body,
@@ -1211,6 +1229,23 @@ impl Parser {
                     elif_body.push(stmt);
                 }
                 self.skip_separators(true);
+            }
+            // Empty elif body is a syntax error
+            if elif_body.is_empty() {
+                let next_tok = if self.check(&[TokenType::Fi]) {
+                    "fi"
+                } else if self.check(&[TokenType::Else]) {
+                    "else"
+                } else if self.check(&[TokenType::Elif]) {
+                    "elif"
+                } else {
+                    "fi"
+                };
+                return Err(ParseException::new(
+                    &format!("syntax error near unexpected token `{}'", next_tok),
+                    self.current().line,
+                    self.current().column,
+                ));
             }
             clauses.push(crate::ast::types::IfClause {
                 condition: elif_condition,
@@ -1229,6 +1264,14 @@ impl Parser {
                 }
                 self.skip_separators(true);
             }
+            // Empty else body is a syntax error
+            if body.is_empty() {
+                return Err(ParseException::new(
+                    "syntax error near unexpected token `fi'",
+                    self.current().line,
+                    self.current().column,
+                ));
+            }
             else_body = Some(body);
         }
 
@@ -1244,16 +1287,19 @@ impl Parser {
     fn parse_for(&mut self) -> Result<CommandNode, ParseException> {
         self.expect(TokenType::For, None)?;
 
-        let variable = if self.check(&[TokenType::Name, TokenType::Word]) {
+        // Check for C-style for: for (( ... ))
+        if self.check(&[TokenType::DParenStart]) {
+            return self.parse_c_style_for(String::new());
+        }
+
+        // Regular for: for VAR in WORDS
+        // The variable can be NAME, IN, or even invalid names like "i.j"
+        // Invalid names are validated at runtime to match bash behavior
+        let variable = if self.is_word() {
             self.advance().value
         } else {
-            return Err(ParseException::new("Expected variable name after 'for'", self.current().line, self.current().column));
+            return Err(ParseException::new("Expected variable name in for loop", self.current().line, self.current().column));
         };
-
-        // Check for C-style for: for ((init; cond; step))
-        if self.check(&[TokenType::DParenStart]) {
-            return self.parse_c_style_for(variable);
-        }
 
         self.skip_newlines();
 
@@ -1347,11 +1393,23 @@ impl Parser {
 
         self.expect(TokenType::DParenEnd, None)?;
         self.skip_newlines();
-        self.expect(TokenType::Do, None)?;
+        if self.check(&[TokenType::Semicolon]) {
+            self.advance();
+        }
+        self.skip_newlines();
 
-        let body = self.parse_compound_list()?;
-
-        self.expect(TokenType::Done, None)?;
+        // Accept either do...done or { } for body (bash allows both)
+        let body = if self.check(&[TokenType::LBrace]) {
+            self.advance();
+            let body = self.parse_compound_list()?;
+            self.expect(TokenType::RBrace, None)?;
+            body
+        } else {
+            self.expect(TokenType::Do, None)?;
+            let body = self.parse_compound_list()?;
+            self.expect(TokenType::Done, None)?;
+            body
+        };
 
         let redirections = self.parse_optional_redirections()?;
 
@@ -1393,6 +1451,15 @@ impl Parser {
 
         let body = self.parse_compound_list()?;
 
+        // Empty body is a syntax error in bash
+        if body.is_empty() {
+            return Err(ParseException::new(
+                "syntax error near unexpected token `done'",
+                self.current().line,
+                self.current().column,
+            ));
+        }
+
         self.expect(TokenType::Done, None)?;
 
         let redirections = self.parse_optional_redirections()?;
@@ -1412,6 +1479,15 @@ impl Parser {
 
         let body = self.parse_compound_list()?;
 
+        // Empty body is a syntax error in bash
+        if body.is_empty() {
+            return Err(ParseException::new(
+                "syntax error near unexpected token `done'",
+                self.current().line,
+                self.current().column,
+            ));
+        }
+
         self.expect(TokenType::Done, None)?;
 
         let redirections = self.parse_optional_redirections()?;
@@ -1424,6 +1500,13 @@ impl Parser {
     fn parse_case(&mut self) -> Result<CommandNode, ParseException> {
         self.expect(TokenType::Case, None)?;
 
+        if !self.is_word() {
+            return Err(ParseException::new(
+                "Expected word after 'case'",
+                self.current().line,
+                self.current().column,
+            ));
+        }
         let word = self.parse_word()?;
 
         self.skip_newlines();
@@ -1433,6 +1516,9 @@ impl Parser {
         let mut items = Vec::new();
 
         while !self.check(&[TokenType::Eof, TokenType::Esac]) {
+            self.check_iteration_limit()?;
+            let pos_before = self.pos;
+
             if self.check(&[TokenType::Newline, TokenType::Semicolon]) {
                 self.advance();
                 continue;
@@ -1441,28 +1527,71 @@ impl Parser {
                 break;
             }
 
-            // Parse patterns
-            let mut patterns = Vec::new();
-            if self.is_word() {
-                patterns.push(self.parse_word()?);
+            // Skip optional (
+            if self.check(&[TokenType::LParen]) {
+                self.advance();
             }
 
-            while self.check(&[TokenType::Pipe]) {
-                self.advance();
-                if self.is_word() {
-                    patterns.push(self.parse_word()?);
+            // Parse patterns
+            let mut patterns = Vec::new();
+            while self.is_word() {
+                patterns.push(self.parse_word()?);
+
+                if self.check(&[TokenType::Pipe]) {
+                    self.advance();
+                } else {
+                    break;
                 }
             }
 
+            if patterns.is_empty() {
+                // Safety: if we didn't get any patterns and didn't advance, break
+                if self.pos == pos_before {
+                    break;
+                }
+                continue;
+            }
+
             self.expect(TokenType::RParen, None)?;
+            self.skip_newlines();
 
             // Parse body
             let mut body = Vec::new();
             while !self.check(&[TokenType::Eof, TokenType::DSemi, TokenType::SemiAnd, TokenType::SemiSemiAnd, TokenType::Esac]) {
+                self.check_iteration_limit()?;
+
+                // Check if we're looking at the start of another case pattern (word followed by ))
+                // This handles the syntax error case of empty actions like: a) b) echo A ;;
+                if self.is_word() && self.peek(1).token_type == TokenType::RParen {
+                    // This looks like another case pattern starting without a terminator
+                    // This is a syntax error in bash
+                    return Err(ParseException::new(
+                        "syntax error near unexpected token `)'",
+                        self.current().line,
+                        self.current().column,
+                    ));
+                }
+                // Also check for optional ( before pattern
+                if self.check(&[TokenType::LParen]) && self.peek(1).token_type == TokenType::Word {
+                    let next_val = self.peek(1).value.clone();
+                    return Err(ParseException::new(
+                        &format!("syntax error near unexpected token `{}'", next_val),
+                        self.current().line,
+                        self.current().column,
+                    ));
+                }
+
+                let inner_pos_before = self.pos;
                 if let Some(stmt) = self.parse_statement()? {
                     body.push(stmt);
                 }
-                self.skip_separators(true);
+                // Don't skip case terminators (;;, ;&, ;;&) - we need to see them
+                self.skip_separators(false);
+
+                // If we didn't advance and didn't get a statement, break to avoid infinite loop
+                if self.pos == inner_pos_before {
+                    break;
+                }
             }
 
             // Parse terminator
@@ -1486,6 +1615,11 @@ impl Parser {
             });
 
             self.skip_newlines();
+
+            // Safety: if we didn't advance and didn't get an item, break to prevent infinite loop
+            if self.pos == pos_before {
+                break;
+            }
         }
 
         self.expect(TokenType::Esac, None)?;

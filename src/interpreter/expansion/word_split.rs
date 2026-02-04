@@ -2,6 +2,10 @@
 //!
 //! IFS-based word splitting for unquoted expansions.
 
+use crate::ast::types::{
+    InnerParameterOperation, ParameterExpansionPart, ParameterOperation, WordPart,
+};
+use crate::interpreter::expansion::analysis::{glob_pattern_has_var_ref, is_operation_word_entirely_quoted};
 use crate::interpreter::helpers::{get_ifs, split_by_ifs_for_expansion_ex, IfsExpansionSplitResult};
 use std::collections::HashMap;
 
@@ -240,6 +244,123 @@ pub fn simple_word_split(value: &str, env: &HashMap<String, String>) -> Vec<Stri
     let ifs_chars = get_ifs(env);
     let result = split_by_ifs_for_expansion_ex(value, ifs_chars);
     result.words
+}
+
+/// Check if a word part is splittable (subject to IFS splitting).
+/// Unquoted parameter expansions, command substitutions, and arithmetic expansions
+/// are splittable. Quoted parts (DoubleQuoted, SingleQuoted) are NOT splittable.
+pub fn is_part_splittable(part: &WordPart) -> bool {
+    match part {
+        // Quoted parts are never splittable
+        WordPart::DoubleQuoted(_) | WordPart::SingleQuoted(_) => false,
+
+        // Literal parts are not splittable (they join with adjacent fields)
+        WordPart::Literal(_) => false,
+
+        // Escaped parts are not splittable
+        WordPart::Escaped(_) => false,
+
+        // Glob parts are splittable only if they contain variable references
+        // e.g., +($ABC) where ABC contains IFS characters should be split
+        WordPart::Glob(g) => glob_pattern_has_var_ref(&g.pattern),
+
+        // Parameter expansion is splittable unless its operation word is entirely quoted
+        WordPart::ParameterExpansion(pe) => {
+            // Word splitting behavior depends on whether the default value is entirely quoted:
+            //
+            // - ${v:-"AxBxC"} - entirely quoted default value, should NOT be split
+            //   The quotes protect the entire default value from word splitting.
+            //
+            // - ${v:-x"AxBxC"x} - mixed quoted/unquoted parts, SHOULD be split
+            //   The unquoted parts (x) act as potential word boundaries when containing IFS chars.
+            //   The quoted part "AxBxC" is protected from internal splitting.
+            //
+            // - ${v:-AxBxC} - entirely unquoted, SHOULD be split
+            //   All IFS chars in the result cause word boundaries.
+            !is_operation_word_entirely_quoted(pe)
+        }
+
+        // Command substitution is always splittable
+        WordPart::CommandSubstitution(_) => true,
+
+        // Arithmetic expansion is always splittable
+        WordPart::ArithmeticExpansion(_) => true,
+
+        // Process substitution is not splittable (produces a filename)
+        WordPart::ProcessSubstitution(_) => false,
+
+        // Brace expansion is not splittable at this stage
+        WordPart::BraceExpansion(_) => false,
+
+        // Tilde expansion is not splittable
+        WordPart::TildeExpansion(_) => false,
+    }
+}
+
+/// Check if a DoubleQuoted part contains only simple literals (no expansions).
+/// This is used to determine if special IFS handling is needed.
+pub fn is_simple_quoted_literal(part: &WordPart) -> bool {
+    match part {
+        WordPart::SingleQuoted(_) => true, // Single quotes always contain only literals
+        WordPart::DoubleQuoted(dq) => {
+            // Check that all parts inside the double quotes are literals
+            dq.parts.iter().all(|p| matches!(p, WordPart::Literal(_)))
+        }
+        _ => false,
+    }
+}
+
+/// Get the word parts from an operation if it has a word field (DefaultValue, AssignDefault, UseAlternative, ErrorIfUnset)
+pub fn get_operation_word_parts(op: &ParameterOperation) -> Option<&Vec<WordPart>> {
+    match op {
+        ParameterOperation::Inner(inner) => match inner {
+            InnerParameterOperation::DefaultValue(dv) => Some(&dv.word.parts),
+            InnerParameterOperation::AssignDefault(ad) => Some(&ad.word.parts),
+            InnerParameterOperation::UseAlternative(ua) => Some(&ua.word.parts),
+            InnerParameterOperation::ErrorIfUnset(eiu) => eiu.word.as_ref().map(|w| &w.parts),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Check if a ParameterExpansion has a default/alternative value with mixed quoted/unquoted parts.
+/// These need special handling to preserve quote boundaries during IFS splitting.
+///
+/// This function returns non-null only when:
+/// 1. The default value has mixed quoted and unquoted parts
+/// 2. The quoted parts contain only simple literals (no $@, $*, or other expansions)
+///
+/// Cases like ${var:-"$@"x} should NOT use special handling because $@ has special
+/// behavior that needs to be preserved.
+pub fn has_mixed_quoted_default_value(part: &ParameterExpansionPart) -> Option<&Vec<WordPart>> {
+    let op = part.operation.as_ref()?;
+    let op_word_parts = get_operation_word_parts(op)?;
+
+    if op_word_parts.len() <= 1 {
+        return None;
+    }
+
+    // Check if the operation word has simple quoted parts (only literals inside)
+    let has_simple_quoted_parts = op_word_parts.iter().any(is_simple_quoted_literal);
+    let has_unquoted_parts = op_word_parts.iter().any(|p| {
+        matches!(
+            p,
+            WordPart::Literal(_)
+                | WordPart::ParameterExpansion(_)
+                | WordPart::CommandSubstitution(_)
+                | WordPart::ArithmeticExpansion(_)
+        )
+    });
+
+    // Only apply special handling when we have simple quoted literals and unquoted parts
+    // This handles cases like ${var:-"2_3"x_x"4_5"} where the IFS char should only
+    // split at the unquoted underscore, not inside the quoted strings
+    if has_simple_quoted_parts && has_unquoted_parts {
+        Some(op_word_parts)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]

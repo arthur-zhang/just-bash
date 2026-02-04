@@ -21,6 +21,69 @@ pub fn get_xtrace_prefix(env: &HashMap<String, String>) -> String {
     }
 }
 
+/// Get the xtrace prefix with PS4 variable expansion.
+///
+/// This version accepts an expander function that can expand variables
+/// in the PS4 string (e.g., $VAR, ${VAR}, $?, $LINENO).
+///
+/// # Arguments
+/// * `env` - Environment variables
+/// * `expander` - Function to expand the PS4 string
+///
+/// # Returns
+/// The expanded PS4 prefix, or the literal PS4 if expansion fails.
+pub fn get_xtrace_prefix_expanded<F>(
+    env: &HashMap<String, String>,
+    expander: F,
+) -> String
+where
+    F: FnOnce(&str) -> Result<String, String>,
+{
+    match env.get("PS4") {
+        None => DEFAULT_PS4.to_string(),
+        Some(ps4) if ps4.is_empty() => String::new(),
+        Some(ps4) => {
+            match expander(ps4) {
+                Ok(expanded) => expanded,
+                Err(_) => ps4.clone(), // Fallback to literal on expansion error
+            }
+        }
+    }
+}
+
+/// Get the xtrace prefix with PS4 variable expansion and error reporting.
+///
+/// This version also reports expansion errors to stderr.
+///
+/// # Arguments
+/// * `env` - Environment variables
+/// * `expander` - Function to expand the PS4 string
+///
+/// # Returns
+/// A tuple of (prefix, stderr) where stderr contains any error messages.
+pub fn get_xtrace_prefix_with_error<F>(
+    env: &HashMap<String, String>,
+    expander: F,
+) -> (String, Option<String>)
+where
+    F: FnOnce(&str) -> Result<String, String>,
+{
+    match env.get("PS4") {
+        None => (DEFAULT_PS4.to_string(), None),
+        Some(ps4) if ps4.is_empty() => (String::new(), None),
+        Some(ps4) => {
+            match expander(ps4) {
+                Ok(expanded) => (expanded, None),
+                Err(err_msg) => {
+                    let stderr = format!("bash: {}: bad substitution\n", ps4);
+                    // Return literal PS4 on error, like bash does
+                    (ps4.clone(), Some(format!("{}{}", stderr, err_msg)))
+                }
+            }
+        }
+    }
+}
+
 /// Quote a value for trace output if needed.
 /// Follows bash conventions for xtrace output quoting.
 pub fn quote_for_trace(value: &str) -> String {

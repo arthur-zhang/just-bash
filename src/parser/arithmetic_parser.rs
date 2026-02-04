@@ -9,7 +9,7 @@
 use crate::ast::types::*;
 use super::arithmetic_primaries::{
     skip_arith_whitespace, parse_arith_number, ARITH_ASSIGN_OPS,
-    parse_ansi_c_quoting, parse_localization_quoting,
+    parse_ansi_c_quoting, parse_localization_quoting, parse_nested_arithmetic,
 };
 
 /// Re-export for external use
@@ -738,12 +738,21 @@ fn parse_arith_postfix(input: &str, pos: usize) -> (ArithExpr, usize) {
 fn parse_arith_primary(input: &str, pos: usize, skip_assignment: bool) -> (ArithExpr, usize) {
     let mut current_pos = skip_arith_whitespace(input, pos);
     let chars: Vec<char> = input.chars().collect();
-    
+
+    // Nested arithmetic: $((expr))
+    if let Some(result) = parse_nested_arithmetic(
+        |s, p| Some(parse_arith_expr(s, p)),
+        input,
+        current_pos,
+    ) {
+        return (result.expr, result.pos);
+    }
+
     // ANSI-C quoting: $'...'
     if let Some(result) = parse_ansi_c_quoting(input, current_pos) {
         return (result.expr, result.pos);
     }
-    
+
     // Localization quoting: $"..."
     if let Some(result) = parse_localization_quoting(input, current_pos) {
         return (result.expr, result.pos);
@@ -901,7 +910,24 @@ fn parse_arith_primary(input: &str, pos: usize, skip_assignment: bool) -> (Arith
                 current_pos,
             );
         }
-        
+
+        // Check for floating point (not supported in bash arithmetic)
+        if current_pos < chars.len() && chars[current_pos] == '.'
+            && current_pos + 1 < chars.len() && chars[current_pos + 1].is_ascii_digit()
+        {
+            // Return syntax error for floating point
+            let mut float_str = num_str.clone();
+            float_str.push('.');
+            float_str.push(chars[current_pos + 1]);
+            return (
+                ArithExpr::SyntaxError(ArithSyntaxErrorNode {
+                    error_token: float_str.clone(),
+                    message: format!("{}...: syntax error: invalid arithmetic operator", float_str),
+                }),
+                current_pos,
+            );
+        }
+
         // Check for array subscript on number
         if current_pos < chars.len() && chars[current_pos] == '[' {
             let error_token: String = chars[current_pos..].iter().collect::<String>().trim().to_string();
@@ -913,7 +939,7 @@ fn parse_arith_primary(input: &str, pos: usize, skip_assignment: bool) -> (Arith
                 chars.len(),
             );
         }
-        
+
         let value = parse_arith_number(&num_str).unwrap_or(0);
         return (ArithExpr::Number(ArithNumberNode { value }), current_pos);
     }
@@ -936,6 +962,46 @@ fn parse_arith_primary(input: &str, pos: usize, skip_assignment: bool) -> (Arith
         }
         let content: String = chars[brace_start..i].iter().collect();
         let after_brace = i + 1;
+
+        // Check for dynamic base constant: ${base}#value or ${base}xHEX or ${base}octal
+        if after_brace < chars.len() && chars[after_brace] == '#' {
+            // Dynamic base#value: ${base}#digits
+            let mut value_end = after_brace + 1;
+            while value_end < chars.len() && (chars[value_end].is_ascii_alphanumeric() || chars[value_end] == '@' || chars[value_end] == '_') {
+                value_end += 1;
+            }
+            let value_str: String = chars[after_brace + 1..value_end].iter().collect();
+            return (
+                ArithExpr::DynamicBase(ArithDynamicBaseNode {
+                    base_expr: content,
+                    value: value_str,
+                }),
+                value_end,
+            );
+        }
+        if after_brace < chars.len() && (chars[after_brace].is_ascii_digit() || chars[after_brace] == 'x' || chars[after_brace] == 'X') {
+            // Dynamic octal (${zero}11) or hex (${zero}xAB)
+            let mut num_end = after_brace;
+            if chars[after_brace] == 'x' || chars[after_brace] == 'X' {
+                num_end += 1; // Skip x/X
+                while num_end < chars.len() && chars[num_end].is_ascii_hexdigit() {
+                    num_end += 1;
+                }
+            } else {
+                while num_end < chars.len() && chars[num_end].is_ascii_digit() {
+                    num_end += 1;
+                }
+            }
+            let suffix: String = chars[after_brace..num_end].iter().collect();
+            return (
+                ArithExpr::DynamicNumber(ArithDynamicNumberNode {
+                    prefix: content,
+                    suffix,
+                }),
+                num_end,
+            );
+        }
+
         current_pos = after_brace;
         return (
             ArithExpr::BracedExpansion(ArithBracedExpansionNode { content }),

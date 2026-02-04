@@ -4,7 +4,9 @@
 
 pub mod alias_expansion;
 pub mod arithmetic;
+pub mod builtins;
 pub mod command_resolution;
+pub mod conditionals;
 pub mod control_flow;
 pub mod errors;
 pub mod expansion;
@@ -16,7 +18,9 @@ pub mod types;
 
 pub use alias_expansion::*;
 pub use arithmetic::*;
+pub use builtins::*;
 pub use command_resolution::*;
+pub use conditionals::*;
 pub use control_flow::*;
 pub use errors::*;
 pub use expansion::*;

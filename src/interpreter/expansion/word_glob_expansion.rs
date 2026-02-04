@@ -2,8 +2,15 @@
 //!
 //! Provides helper functions for glob/pathname expansion.
 //! The main word expansion flow is handled at the interpreter level.
+//!
+//! This module handles:
+//! - Glob pattern expansion
+//! - Brace expansion result handling
+//! - Word splitting and glob expansion coordination
 
 use crate::interpreter::expansion::{has_glob_pattern, unescape_glob_pattern};
+use crate::interpreter::helpers::{get_ifs, split_by_ifs_for_expansion};
+use crate::interpreter::InterpreterState;
 use std::path::Path;
 
 /// Result of glob expansion.
@@ -137,6 +144,102 @@ pub fn split_and_glob_expand(
         let expanded = expand_glob_pattern(value, cwd, failglob, nullglob, extglob)?;
         result.extend(expanded.values);
     }
+    Ok(result)
+}
+
+/// Options for word expansion.
+#[derive(Debug, Clone, Default)]
+pub struct WordExpansionOptions {
+    pub failglob: bool,
+    pub nullglob: bool,
+    pub noglob: bool,
+    pub extglob: bool,
+    pub globstar: bool,
+    pub dotglob: bool,
+}
+
+impl WordExpansionOptions {
+    /// Create options from interpreter state.
+    pub fn from_state(state: &InterpreterState) -> Self {
+        Self {
+            failglob: state.shopt_options.failglob,
+            nullglob: state.shopt_options.nullglob,
+            noglob: state.options.noglob,
+            extglob: state.shopt_options.extglob,
+            globstar: state.shopt_options.globstar,
+            dotglob: state.shopt_options.dotglob,
+        }
+    }
+}
+
+/// Handle brace expansion results by applying glob expansion to each result.
+pub fn handle_brace_expansion_results(
+    brace_expanded: &[String],
+    cwd: &Path,
+    options: &WordExpansionOptions,
+) -> Result<GlobExpansionResult, String> {
+    if options.noglob {
+        return Ok(GlobExpansionResult {
+            values: brace_expanded.to_vec(),
+            quoted: false,
+        });
+    }
+
+    let mut result = Vec::new();
+    for value in brace_expanded {
+        let expanded = expand_glob_pattern(value, cwd, options.failglob, options.nullglob, options.extglob)?;
+        result.extend(expanded.values);
+    }
+
+    Ok(GlobExpansionResult {
+        values: result,
+        quoted: false,
+    })
+}
+
+/// Perform word splitting on a value and then glob expand each word.
+pub fn split_and_glob_expand_with_state(
+    value: &str,
+    state: &InterpreterState,
+    cwd: &Path,
+) -> Result<Vec<String>, String> {
+    let options = WordExpansionOptions::from_state(state);
+    let ifs = get_ifs(&state.env);
+    let words = split_by_ifs_for_expansion(value, ifs);
+
+    if options.noglob {
+        return Ok(words);
+    }
+
+    let mut result = Vec::new();
+    for word in words {
+        let expanded = expand_glob_pattern(&word, cwd, options.failglob, options.nullglob, options.extglob)?;
+        result.extend(expanded.values);
+    }
+
+    Ok(result)
+}
+
+/// Expand multiple values with glob expansion.
+pub fn expand_values_with_glob(
+    values: &[String],
+    cwd: &Path,
+    options: &WordExpansionOptions,
+) -> Result<Vec<String>, String> {
+    if options.noglob {
+        return Ok(values.to_vec());
+    }
+
+    let mut result = Vec::new();
+    for value in values {
+        if has_glob_pattern(value, options.extglob) {
+            let expanded = expand_glob_pattern(value, cwd, options.failglob, options.nullglob, options.extglob)?;
+            result.extend(expanded.values);
+        } else {
+            result.push(unescape_glob_pattern(value));
+        }
+    }
+
     Ok(result)
 }
 

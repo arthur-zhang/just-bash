@@ -16,7 +16,7 @@
 
 use std::collections::HashSet;
 use crate::ast::types::*;
-use crate::interpreter::types::{InterpreterContext, ExecutionLimits};
+use crate::interpreter::types::InterpreterContext;
 use crate::interpreter::errors::ArithmeticError;
 use crate::parser::{parse_arith_expr, parse_arith_number};
 
@@ -155,6 +155,12 @@ fn is_valid_identifier(name: &str) -> bool {
 // Array Operations
 // ============================================================================
 
+/// Get a variable value, with support for special variables.
+fn get_variable(ctx: &InterpreterContext, name: &str) -> String {
+    // For now, just get from env - special variables would need more context
+    ctx.state.env.get(name).cloned().unwrap_or_default()
+}
+
 /// Get array elements as a list of (index, value) tuples.
 /// Returns indices in sorted order for indexed arrays.
 fn get_array_elements(ctx: &InterpreterContext, array_name: &str) -> Vec<(Option<i64>, String)> {
@@ -180,6 +186,100 @@ fn get_array_elements(ctx: &InterpreterContext, array_name: &str) -> Vec<(Option
     // Sort by numeric index for consistent ordering
     result.sort_by_key(|(idx, _)| idx.unwrap_or(i64::MAX));
     result
+}
+
+// ============================================================================
+// Parameter Expansion
+// ============================================================================
+
+/// Expand braced parameter content like "j:-5" or "var:=default"
+/// Returns the expanded value as a string
+fn expand_braced_content(ctx: &mut InterpreterContext, content: &str) -> String {
+    // Handle ${#var} - length
+    if content.starts_with('#') {
+        let var_name = &content[1..];
+        // Handle ${#arr[@]} and ${#arr[*]} - array length
+        if var_name.ends_with("[@]") || var_name.ends_with("[*]") {
+            let array_name = &var_name[..var_name.len() - 3];
+            let elements = get_array_elements(ctx, array_name);
+            return elements.len().to_string();
+        }
+        // Regular ${#var} - string length
+        let value = ctx.state.env.get(var_name).cloned().unwrap_or_default();
+        return value.len().to_string();
+    }
+
+    // Handle ${!var} - indirection
+    if content.starts_with('!') {
+        let var_name = &content[1..];
+        let indirect = ctx.state.env.get(var_name).cloned().unwrap_or_default();
+        return ctx.state.env.get(&indirect).cloned().unwrap_or_default();
+    }
+
+    // Find operator position
+    let operators = [":-", ":=", ":?", ":+", "-", "=", "?", "+"];
+    let mut op_index: Option<usize> = None;
+    let mut op = "";
+    for operator in &operators {
+        if let Some(idx) = content.find(operator) {
+            if idx > 0 && (op_index.is_none() || idx < op_index.unwrap()) {
+                op_index = Some(idx);
+                op = operator;
+            }
+        }
+    }
+
+    if op_index.is_none() {
+        // Simple ${var} - just get the variable
+        return get_variable(ctx, content);
+    }
+
+    let idx = op_index.unwrap();
+    let var_name = &content[..idx];
+    let default_value = &content[idx + op.len()..];
+    let value = ctx.state.env.get(var_name);
+    let is_unset = value.is_none();
+    let is_empty = value.map(|v| v.is_empty()).unwrap_or(false);
+    let check_empty = op.starts_with(':');
+
+    match op {
+        ":-" | "-" => {
+            let use_default = is_unset || (check_empty && is_empty);
+            if use_default {
+                default_value.to_string()
+            } else {
+                value.cloned().unwrap_or_default()
+            }
+        }
+        ":=" | "=" => {
+            let use_default = is_unset || (check_empty && is_empty);
+            if use_default {
+                ctx.state.env.insert(var_name.to_string(), default_value.to_string());
+                default_value.to_string()
+            } else {
+                value.cloned().unwrap_or_default()
+            }
+        }
+        ":+" | "+" => {
+            let use_alternative = !(is_unset || (check_empty && is_empty));
+            if use_alternative {
+                default_value.to_string()
+            } else {
+                String::new()
+            }
+        }
+        ":?" | "?" => {
+            let should_error = is_unset || (check_empty && is_empty);
+            if should_error {
+                // In real implementation, this would throw an error
+                // For now, return empty string
+                String::new()
+            } else {
+                value.cloned().unwrap_or_default()
+            }
+        }
+        _ => value.cloned().unwrap_or_default(),
+    }
 }
 
 // ============================================================================
@@ -313,21 +413,27 @@ pub fn evaluate_arithmetic(
             Ok(0)
         }
 
-        ArithExpr::BracedExpansion(_node) => {
-            // This would need full expansion context - for now return 0
-            Ok(0)
+        ArithExpr::BracedExpansion(node) => {
+            let expanded = expand_braced_content(ctx, &node.content);
+            Ok(expanded.parse::<i64>().unwrap_or(0))
         }
 
-        ArithExpr::DynamicBase(_node) => {
+        ArithExpr::DynamicBase(node) => {
             // ${base}#value - expand base, then parse value in that base
-            // For now return 0
-            Ok(0)
+            let base_str = expand_braced_content(ctx, &node.base_expr);
+            let base = base_str.parse::<i64>().unwrap_or(0);
+            if base < 2 || base > 64 {
+                return Ok(0);
+            }
+            let num_str = format!("{}#{}", base, node.value);
+            Ok(parse_arith_number(&num_str).unwrap_or(0))
         }
 
-        ArithExpr::DynamicNumber(_node) => {
+        ArithExpr::DynamicNumber(node) => {
             // ${zero}11 or ${zero}xAB - expand prefix, combine with suffix
-            // For now return 0
-            Ok(0)
+            let prefix = expand_braced_content(ctx, &node.prefix);
+            let num_str = format!("{}{}", prefix, node.suffix);
+            Ok(parse_arith_number(&num_str).unwrap_or(0))
         }
 
         ArithExpr::ArrayElement(node) => {
@@ -602,15 +708,77 @@ pub fn evaluate_arithmetic(
             }
         }
 
-        ArithExpr::DynamicAssignment(_node) => {
-            // Dynamic assignment: x$foo = 42 or x$foo[5] = 42
-            // For now return 0
-            Ok(0)
+        ArithExpr::DynamicAssignment(node) => {
+            // Dynamic assignment: x$foo = 42 or x$foo[5] = 42 assigns to variable built from concatenation
+            let mut var_name = String::new();
+            // Build the variable name from the target expression
+            match &node.target {
+                ArithExpr::Concat(concat_node) => {
+                    for part in &concat_node.parts {
+                        var_name.push_str(&eval_concat_part_to_string(ctx, part, is_expansion_context)?);
+                    }
+                }
+                ArithExpr::Variable(var_node) => {
+                    if var_node.has_dollar_prefix {
+                        var_name = get_variable(ctx, &var_node.name);
+                    } else {
+                        var_name = var_node.name.clone();
+                    }
+                }
+                _ => {}
+            }
+
+            if var_name.is_empty() || !is_valid_identifier(&var_name) {
+                return Ok(0); // Invalid variable name
+            }
+
+            // Build the env key - include subscript for array assignment
+            let env_key = if let Some(ref subscript) = node.subscript {
+                let index = evaluate_arithmetic(ctx, subscript, is_expansion_context)?;
+                format!("{}_{}", var_name, index)
+            } else {
+                var_name
+            };
+
+            let current = ctx.state.env.get(&env_key)
+                .and_then(|v| v.parse::<i64>().ok())
+                .unwrap_or(0);
+            let value = evaluate_arithmetic(ctx, &node.value, is_expansion_context)?;
+            let new_value = apply_assignment_op(current, value, &node.operator);
+            ctx.state.env.insert(env_key, new_value.to_string());
+            Ok(new_value)
         }
 
-        ArithExpr::DynamicElement(_node) => {
-            // Dynamic element: x$foo[5]
-            // For now return 0
+        ArithExpr::DynamicElement(node) => {
+            // Dynamic array element: x$foo[5] - build array name from concat, then access element
+            let mut var_name = String::new();
+            match &node.name_expr {
+                ArithExpr::Concat(concat_node) => {
+                    for part in &concat_node.parts {
+                        var_name.push_str(&eval_concat_part_to_string(ctx, part, is_expansion_context)?);
+                    }
+                }
+                ArithExpr::Variable(var_node) => {
+                    if var_node.has_dollar_prefix {
+                        var_name = get_variable(ctx, &var_node.name);
+                    } else {
+                        var_name = var_node.name.clone();
+                    }
+                }
+                _ => {}
+            }
+
+            if var_name.is_empty() || !is_valid_identifier(&var_name) {
+                return Ok(0); // Invalid variable name
+            }
+
+            let index = evaluate_arithmetic(ctx, &node.subscript, is_expansion_context)?;
+            let env_key = format!("{}_{}", var_name, index);
+            let value = ctx.state.env.get(&env_key).cloned().unwrap_or_default();
+            if !value.is_empty() {
+                // Parse the value as arithmetic (handles expressions like "1+2+3")
+                return evaluate_arith_value(ctx, &value, is_expansion_context);
+            }
             Ok(0)
         }
     }
@@ -682,6 +850,35 @@ fn handle_inc_dec(
             }
         }
 
+        ArithExpr::DynamicElement(dyn_node) => {
+            // Handle dynamic array element increment/decrement: x$foo[5]++
+            let mut var_name = String::new();
+            match &dyn_node.name_expr {
+                ArithExpr::Concat(concat_node) => {
+                    for part in &concat_node.parts {
+                        var_name.push_str(&eval_concat_part_to_string(ctx, part, is_expansion_context)?);
+                    }
+                }
+                ArithExpr::Variable(var_node) => {
+                    if var_node.has_dollar_prefix {
+                        var_name = get_variable(ctx, &var_node.name);
+                    } else {
+                        var_name = var_node.name.clone();
+                    }
+                }
+                _ => {}
+            }
+
+            if is_valid_identifier(&var_name) {
+                let index = evaluate_arithmetic(ctx, &dyn_node.subscript, is_expansion_context)?;
+                let env_key = format!("{}_{}", var_name, index);
+                ctx.state.env.insert(env_key, new_value.to_string());
+                Ok(if prefix { new_value } else { eval_operand })
+            } else {
+                Ok(eval_operand)
+            }
+        }
+
         _ => Ok(eval_operand),
     }
 }
@@ -705,6 +902,30 @@ fn eval_concat_part_to_string(
 
         ArithExpr::SpecialVar(var_node) => {
             Ok(get_arith_variable(ctx, &var_node.name))
+        }
+
+        ArithExpr::SingleQuote(_node) => {
+            // For single quotes in concatenation context, evaluate through main evaluator
+            // which will handle the expansion vs command context distinction
+            let val = evaluate_arithmetic(ctx, part, is_expansion_context)?;
+            Ok(val.to_string())
+        }
+
+        ArithExpr::BracedExpansion(node) => {
+            Ok(expand_braced_content(ctx, &node.content))
+        }
+
+        ArithExpr::CommandSubst(_node) => {
+            // Command substitution needs execFn - for now return "0"
+            Ok("0".to_string())
+        }
+
+        ArithExpr::Concat(concat_node) => {
+            let mut result = String::new();
+            for p in &concat_node.parts {
+                result.push_str(&eval_concat_part_to_string(ctx, p, is_expansion_context)?);
+            }
+            Ok(result)
         }
 
         _ => {

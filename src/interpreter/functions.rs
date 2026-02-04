@@ -134,6 +134,9 @@ pub fn cleanup_function_call(
     state: &mut InterpreterState,
     ctx: FunctionCallContext,
 ) {
+    // Get the scope index before popping (for localVarStack cleanup)
+    let scope_index = ctx.scope_index;
+
     // Pop local scope and restore variables
     if let Some(local_scope) = state.local_scopes.pop() {
         for (var_name, original_value) in local_scope {
@@ -142,6 +145,14 @@ pub fn cleanup_function_call(
                 None => { state.env.remove(&var_name); }
             }
         }
+    }
+
+    // Clear any localVarStack entries for this scope
+    clear_local_var_stack_for_scope(state, scope_index);
+
+    // Clear fullyUnsetLocals entries for this scope only
+    if let Some(ref mut fully_unset_locals) = state.fully_unset_locals {
+        fully_unset_locals.retain(|_, entry_scope| *entry_scope != scope_index);
     }
 
     // Pop local export tracking and restore export state
@@ -182,6 +193,31 @@ pub fn cleanup_function_call(
 
     // Decrement call depth
     state.call_depth -= 1;
+}
+
+/// Clear local variable stack entries for a specific scope.
+/// This is called during function cleanup to remove entries that belong to the exiting scope.
+pub fn clear_local_var_stack_for_scope(state: &mut InterpreterState, scope_index: usize) {
+    if let Some(ref mut local_var_stack) = state.local_var_stack {
+        // Collect names to remove (to avoid borrowing issues)
+        let mut names_to_remove = Vec::new();
+
+        for (name, stack) in local_var_stack.iter_mut() {
+            // Remove entries from the top of the stack that belong to this scope
+            while !stack.is_empty() && stack.last().map(|e| e.scope_index) == Some(scope_index) {
+                stack.pop();
+            }
+            // Mark empty entries for cleanup
+            if stack.is_empty() {
+                names_to_remove.push(name.clone());
+            }
+        }
+
+        // Clean up empty entries
+        for name in names_to_remove {
+            local_var_stack.remove(&name);
+        }
+    }
 }
 
 /// Handle a return error from a function call.

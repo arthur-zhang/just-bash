@@ -8,6 +8,18 @@ use regex_lite::Regex;
 use crate::interpreter::types::InterpreterState;
 use crate::interpreter::helpers::array::{get_array_indices, get_assoc_array_keys};
 
+/// Result of variable test evaluation
+pub struct VariableTestResult {
+    pub is_set: bool,
+    pub stderr: Option<String>,
+}
+
+impl VariableTestResult {
+    pub fn new(is_set: bool, stderr: Option<String>) -> Self {
+        Self { is_set, stderr }
+    }
+}
+
 /// Check if a variable is set (-v test).
 /// Handles both simple variables and array element access with negative indices.
 ///
@@ -103,6 +115,107 @@ pub fn evaluate_variable_test(
 
     // For indexed arrays, check if there are any indices
     (!get_array_indices(env, operand).is_empty(), None)
+}
+
+/// Check if a variable is set (-v test) with arithmetic expression evaluation support.
+///
+/// This version accepts an arithmetic evaluator function for evaluating complex
+/// index expressions like `arr[i+1]` or `arr[x*2]`.
+///
+/// # Arguments
+/// * `state` - The interpreter state
+/// * `env` - The environment variables
+/// * `operand` - The variable name to test
+/// * `current_line` - Current line number for error messages
+/// * `arith_eval` - Optional function to evaluate arithmetic expressions
+pub fn evaluate_variable_test_with_arith<F>(
+    state: &InterpreterState,
+    env: &HashMap<String, String>,
+    operand: &str,
+    current_line: Option<i32>,
+    arith_eval: Option<F>,
+) -> VariableTestResult
+where
+    F: Fn(&str) -> Option<i64>,
+{
+    // Check for array element syntax: var[index]
+    let array_re = Regex::new(r"^([a-zA-Z_][a-zA-Z0-9_]*)\[(.+)\]$").unwrap();
+
+    if let Some(caps) = array_re.captures(operand) {
+        let array_name = &caps[1];
+        let index_expr = &caps[2];
+
+        // Check if this is an associative array
+        let is_assoc = state.associative_arrays.as_ref().map_or(false, |a| a.contains(array_name));
+
+        if is_assoc {
+            // For associative arrays, use the key as-is (strip quotes if present)
+            let mut key = index_expr.to_string();
+            if (key.starts_with('\'') && key.ends_with('\''))
+                || (key.starts_with('"') && key.ends_with('"'))
+            {
+                if key.len() >= 2 {
+                    key = key[1..key.len() - 1].to_string();
+                }
+            }
+            // Expand variables in key
+            let var_re = Regex::new(r"\$([a-zA-Z_][a-zA-Z0-9_]*)").unwrap();
+            let expanded_key = var_re.replace_all(&key, |caps: &regex_lite::Captures| {
+                let var_name = &caps[1];
+                env.get(var_name).cloned().unwrap_or_default()
+            });
+            let env_key = format!("{}_{}", array_name, expanded_key);
+            return VariableTestResult::new(env.contains_key(&env_key), None);
+        }
+
+        // Try to evaluate as arithmetic expression first
+        let index: Option<i64> = if let Some(ref eval_fn) = arith_eval {
+            eval_fn(index_expr)
+        } else {
+            None
+        }.or_else(|| {
+            // Fallback: try to parse as numeric
+            index_expr.parse::<i64>().ok()
+        }).or_else(|| {
+            // Last resort: try looking up as variable
+            env.get(index_expr).and_then(|v| v.parse::<i64>().ok())
+        });
+
+        if let Some(mut idx) = index {
+            // Handle negative indices
+            if idx < 0 {
+                let indices = get_array_indices(env, array_name);
+                let line_num = current_line.unwrap_or(0);
+                if indices.is_empty() {
+                    let stderr = format!("bash: line {}: {}: bad array subscript\n", line_num, array_name);
+                    return VariableTestResult::new(false, Some(stderr));
+                }
+                let max_index = *indices.iter().max().unwrap_or(&0);
+                idx = max_index + 1 + idx;
+                if idx < 0 {
+                    let stderr = format!("bash: line {}: {}: bad array subscript\n", line_num, array_name);
+                    return VariableTestResult::new(false, Some(stderr));
+                }
+            }
+
+            let env_key = format!("{}_{}", array_name, idx);
+            return VariableTestResult::new(env.contains_key(&env_key), None);
+        }
+
+        return VariableTestResult::new(false, None);
+    }
+
+    // Check if it's a regular variable
+    if env.contains_key(operand) {
+        return VariableTestResult::new(true, None);
+    }
+
+    // Check if it's an array with elements
+    if state.associative_arrays.as_ref().map_or(false, |a| a.contains(operand)) {
+        return VariableTestResult::new(!get_assoc_array_keys(env, operand).is_empty(), None);
+    }
+
+    VariableTestResult::new(!get_array_indices(env, operand).is_empty(), None)
 }
 
 /// Check if a variable is a nameref (-R test).

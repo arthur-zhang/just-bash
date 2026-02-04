@@ -4,6 +4,8 @@
 //! - "${!ref}" where ref='arr[@]' or ref='arr[*]'
 //! - "${!ref:offset}" and "${!ref:offset:length}" - array slicing via indirection
 //! - "${!ref:-default}" and "${!ref:+alternative}" - default/alternative via indirection
+//! - "${ref+${!ref}}" - indirect in alternative value
+//! - "${!ref+${!ref}}" - indirect with inner alternative
 
 use crate::interpreter::expansion::{get_array_elements, get_variable, is_variable_set, get_variable_attributes, ArrayIndex};
 use crate::interpreter::helpers::get_ifs_separator;
@@ -324,6 +326,224 @@ pub fn expand_indirect_positional(
     None
 }
 
+// ============================================================================
+// Indirect in Alternative/Default Value Handlers
+// ============================================================================
+
+/// Context for checking if a variable should use alternative/default.
+#[derive(Debug, Clone)]
+pub struct IndirectAlternativeContext {
+    /// Whether the outer variable is set
+    pub is_set: bool,
+    /// Whether the outer variable is empty
+    pub is_empty: bool,
+    /// Whether to check for empty (colon variant)
+    pub check_empty: bool,
+}
+
+/// Handle ${ref+${!ref}} or ${ref-${!ref}} - indirect in alternative/default value.
+/// This handles patterns like: ${hooksSlice+"${!hooksSlice}"} which should preserve element boundaries.
+///
+/// # Arguments
+/// * `state` - The interpreter state
+/// * `outer_var_name` - The outer variable name (e.g., "hooksSlice")
+/// * `inner_ref_var_name` - The inner reference variable name (e.g., "hooksSlice")
+/// * `is_alternative` - true for UseAlternative (+), false for DefaultValue (-)
+/// * `check_empty` - Whether to check for empty (colon variant)
+///
+/// # Returns
+/// * `None` if the inner reference doesn't point to an array
+/// * `Some((should_expand, result))` where:
+///   - `should_expand`: true if the alternative/default should be expanded
+///   - `result`: the array values if should_expand is true
+pub fn check_indirect_in_alternative(
+    state: &InterpreterState,
+    outer_var_name: &str,
+    inner_ref_var_name: &str,
+    is_alternative: bool,
+    check_empty: bool,
+) -> Option<(bool, IndirectExpansionResult)> {
+    // Get the value of the inner reference variable to see if it points to an array
+    let ref_value = get_variable(state, inner_ref_var_name);
+    let (array_name, is_star) = parse_array_reference(&ref_value)?;
+
+    // Check if we should use the alternative/default
+    let is_set = is_variable_set(state, outer_var_name);
+    let outer_value = get_variable(state, outer_var_name);
+    let is_empty = outer_value.is_empty();
+
+    let should_expand = if is_alternative {
+        // ${var+word} - expand if var IS set (and non-empty if :+)
+        is_set && !(check_empty && is_empty)
+    } else {
+        // ${var-word} - expand if var is NOT set (or empty if :-)
+        !is_set || (check_empty && is_empty)
+    };
+
+    if should_expand {
+        // Expand the inner indirect array reference
+        let elements = get_array_elements(state, &array_name);
+        if !elements.is_empty() {
+            let values: Vec<String> = elements.into_iter().map(|(_, v)| v).collect();
+            if is_star {
+                // arr[*] - join with IFS into one word
+                let ifs_sep = get_ifs_separator(&state.env);
+                return Some((true, IndirectExpansionResult {
+                    values: vec![values.join(ifs_sep)],
+                    quoted: true,
+                }));
+            }
+            // arr[@] - each element as a separate word (quoted)
+            return Some((true, IndirectExpansionResult {
+                values,
+                quoted: true,
+            }));
+        }
+        // No array elements - check for scalar variable
+        if let Some(scalar_value) = state.env.get(&array_name) {
+            return Some((true, IndirectExpansionResult {
+                values: vec![scalar_value.clone()],
+                quoted: true,
+            }));
+        }
+        // Variable is unset - return empty
+        return Some((true, IndirectExpansionResult {
+            values: vec![],
+            quoted: true,
+        }));
+    }
+
+    // Don't expand the alternative - return empty
+    Some((false, IndirectExpansionResult {
+        values: vec![],
+        quoted: false,
+    }))
+}
+
+/// Handle ${!ref+${!ref}} or ${!ref-${!ref}} - indirect with inner alternative/default value.
+/// This handles patterns like: ${!hooksSlice+"${!hooksSlice}"} which should preserve element boundaries.
+///
+/// # Arguments
+/// * `state` - The interpreter state
+/// * `outer_ref_var_name` - The outer reference variable name
+/// * `inner_ref_var_name` - The inner reference variable name
+/// * `is_alternative` - true for UseAlternative (+), false for DefaultValue (-)
+/// * `check_empty` - Whether to check for empty (colon variant)
+///
+/// # Returns
+/// * `None` if the inner reference doesn't point to an array
+/// * `Some((should_expand, result))` where:
+///   - `should_expand`: true if the alternative/default should be expanded
+///   - `result`: the array values if should_expand is true
+pub fn check_indirection_with_inner_alternative(
+    state: &InterpreterState,
+    outer_ref_var_name: &str,
+    inner_ref_var_name: &str,
+    is_alternative: bool,
+    check_empty: bool,
+) -> Option<(bool, IndirectExpansionResult)> {
+    // Get the value of the inner reference variable to see if it points to an array
+    let ref_value = get_variable(state, inner_ref_var_name);
+    let (array_name, is_star) = parse_array_reference(&ref_value)?;
+
+    // First resolve the outer indirection
+    let outer_ref_value = get_variable(state, outer_ref_var_name);
+
+    // Check if we should use the alternative/default
+    let is_set = is_variable_set(state, outer_ref_var_name);
+    let is_empty = outer_ref_value.is_empty();
+
+    let should_expand = if is_alternative {
+        // ${!var+word} - expand if the indirect target IS set (and non-empty if :+)
+        is_set && !(check_empty && is_empty)
+    } else {
+        // ${!var-word} - expand if the indirect target is NOT set (or empty if :-)
+        !is_set || (check_empty && is_empty)
+    };
+
+    if should_expand {
+        // Expand the inner indirect array reference
+        let elements = get_array_elements(state, &array_name);
+        if !elements.is_empty() {
+            let values: Vec<String> = elements.into_iter().map(|(_, v)| v).collect();
+            if is_star {
+                // arr[*] - join with IFS into one word
+                let ifs_sep = get_ifs_separator(&state.env);
+                return Some((true, IndirectExpansionResult {
+                    values: vec![values.join(ifs_sep)],
+                    quoted: true,
+                }));
+            }
+            // arr[@] - each element as a separate word (quoted)
+            return Some((true, IndirectExpansionResult {
+                values,
+                quoted: true,
+            }));
+        }
+        // No array elements - check for scalar variable
+        if let Some(scalar_value) = state.env.get(&array_name) {
+            return Some((true, IndirectExpansionResult {
+                values: vec![scalar_value.clone()],
+                quoted: true,
+            }));
+        }
+        // Variable is unset - return empty
+        return Some((true, IndirectExpansionResult {
+            values: vec![],
+            quoted: true,
+        }));
+    }
+
+    // Don't expand the alternative - fall through to return empty or the outer value
+    Some((false, IndirectExpansionResult {
+        values: vec![],
+        quoted: false,
+    }))
+}
+
+/// Handle indirect array with AssignDefault "${!ref:=default}".
+/// Returns (should_assign, array_name, array_values) where:
+/// - should_assign: true if the default value should be assigned
+/// - array_name: the target array name for assignment
+/// - array_values: the current array values
+pub fn check_indirect_array_assign_default(
+    state: &InterpreterState,
+    ref_var_name: &str,
+    check_empty: bool,
+) -> Option<(bool, String, IndirectExpansionResult)> {
+    // Get the value of the reference variable
+    let ref_value = get_variable(state, ref_var_name);
+    if ref_value.is_empty() {
+        return None;
+    }
+
+    // Check if it's an array reference
+    let (array_name, is_star) = parse_array_reference(&ref_value)?;
+
+    // Get array elements
+    let elements = get_array_elements(state, &array_name);
+    let is_empty = elements.is_empty();
+    let is_unset = elements.is_empty() && !state.env.contains_key(&array_name);
+
+    let should_assign = is_unset || (check_empty && is_empty);
+
+    let values: Vec<String> = elements.into_iter().map(|(_, v)| v).collect();
+    let result = if is_star {
+        let ifs_sep = get_ifs_separator(&state.env);
+        IndirectExpansionResult {
+            values: vec![values.join(ifs_sep)],
+            quoted: true,
+        }
+    } else {
+        IndirectExpansionResult {
+            values,
+            quoted: true,
+        }
+    };
+
+    Some((should_assign, array_name, result))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -418,5 +638,67 @@ mod tests {
             check_indirect_array_default(&state, "ref", false).unwrap();
         assert!(should_use_default);
         assert!(result.values.is_empty());
+    }
+
+    #[test]
+    fn test_check_indirect_in_alternative_set() {
+        let mut state = make_state_with_array("arr", &["a", "b", "c"]);
+        state.env.insert("ref".to_string(), "arr[@]".to_string());
+        state.env.insert("outer".to_string(), "value".to_string());
+
+        // ${outer+"${!ref}"} - outer is set, should expand
+        let (should_expand, result) =
+            check_indirect_in_alternative(&state, "outer", "ref", true, false).unwrap();
+        assert!(should_expand);
+        assert_eq!(result.values, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn test_check_indirect_in_alternative_unset() {
+        let mut state = make_state_with_array("arr", &["a", "b", "c"]);
+        state.env.insert("ref".to_string(), "arr[@]".to_string());
+        // outer is not set
+
+        // ${outer+"${!ref}"} - outer is unset, should not expand
+        let (should_expand, _result) =
+            check_indirect_in_alternative(&state, "outer", "ref", true, false).unwrap();
+        assert!(!should_expand);
+    }
+
+    #[test]
+    fn test_check_indirect_in_default_unset() {
+        let mut state = make_state_with_array("arr", &["a", "b", "c"]);
+        state.env.insert("ref".to_string(), "arr[@]".to_string());
+        // outer is not set
+
+        // ${outer-"${!ref}"} - outer is unset, should expand
+        let (should_expand, result) =
+            check_indirect_in_alternative(&state, "outer", "ref", false, false).unwrap();
+        assert!(should_expand);
+        assert_eq!(result.values, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn test_check_indirection_with_inner_alternative() {
+        let mut state = make_state_with_array("arr", &["x", "y"]);
+        state.env.insert("ref".to_string(), "arr[@]".to_string());
+        state.env.insert("outer".to_string(), "something".to_string());
+
+        // ${!outer+"${!ref}"} - outer is set, should expand
+        let (should_expand, result) =
+            check_indirection_with_inner_alternative(&state, "outer", "ref", true, false).unwrap();
+        assert!(should_expand);
+        assert_eq!(result.values, vec!["x", "y"]);
+    }
+
+    #[test]
+    fn test_check_indirect_array_assign_default() {
+        let mut state = InterpreterState::default();
+        state.env.insert("ref".to_string(), "empty[@]".to_string());
+
+        let (should_assign, array_name, _result) =
+            check_indirect_array_assign_default(&state, "ref", false).unwrap();
+        assert!(should_assign);
+        assert_eq!(array_name, "empty");
     }
 }

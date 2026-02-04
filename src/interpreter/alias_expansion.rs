@@ -242,6 +242,36 @@ pub fn expand_alias(
             if expand_next && !node.args.is_empty() {
                 // Add the original args to the expanded command's args
                 new_node.args.extend(node.args.clone());
+
+                // Now recursively expand the first arg if it's an alias
+                if !new_node.args.is_empty() {
+                    let first_arg = &new_node.args[0];
+                    if is_literal_unquoted_word(first_arg) {
+                        if let Some(first_arg_name) = get_literal_value(first_arg) {
+                            if has_alias(ctx, first_arg_name) {
+                                // Create a temporary node with the first arg as command
+                                let temp_node = SimpleCommandNode {
+                                    name: Some(new_node.args[0].clone()),
+                                    args: new_node.args[1..].to_vec(),
+                                    assignments: vec![],
+                                    redirections: vec![],
+                                    line: None,
+                                };
+                                let expanded_first = expand_alias(ctx, &temp_node, alias_expansion_stack);
+                                match expanded_first {
+                                    AliasExpansionResult::Expanded(expanded) => {
+                                        // Merge back
+                                        new_node.name = expanded.name;
+                                        new_node.args = expanded.args;
+                                    }
+                                    _ => {
+                                        // Keep the original if expansion failed or was complex
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             AliasExpansionResult::Expanded(new_node)

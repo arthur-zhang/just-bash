@@ -4,7 +4,7 @@
 
 use std::fmt;
 use thiserror::Error;
-use crate::parser::lexer::TokenType;
+use crate::parser::lexer::{Token, TokenType};
 
 // Parser limits to prevent hangs and resource exhaustion
 pub const MAX_INPUT_SIZE: usize = 1_000_000; // 1MB max input
@@ -87,6 +87,7 @@ pub struct ParseError {
     pub message: String,
     pub line: usize,
     pub column: usize,
+    pub token: Option<Token>,
 }
 
 #[derive(Debug, Error)]
@@ -94,6 +95,7 @@ pub struct ParseException {
     pub message: String,
     pub line: usize,
     pub column: usize,
+    pub token: Option<Token>,
 }
 
 impl fmt::Display for ParseException {
@@ -108,6 +110,16 @@ impl ParseException {
             message: message.into(),
             line,
             column,
+            token: None,
+        }
+    }
+
+    pub fn with_token(message: impl Into<String>, line: usize, column: usize, token: Token) -> Self {
+        Self {
+            message: message.into(),
+            line,
+            column,
+            token: Some(token),
         }
     }
 }

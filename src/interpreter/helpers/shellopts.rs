@@ -87,6 +87,18 @@ pub fn build_bashopts(shopt_options: &ShoptOptions) -> String {
     enabled.join(":")
 }
 
+/// Update the SHELLOPTS environment variable to reflect current shell options.
+/// Should be called whenever shell options change (via set -o or shopt -o).
+pub fn update_shellopts(env: &mut std::collections::HashMap<String, String>, options: &ShellOptions) {
+    env.insert("SHELLOPTS".to_string(), build_shellopts(options));
+}
+
+/// Update the BASHOPTS environment variable to reflect current shopt options.
+/// Should be called whenever shopt options change.
+pub fn update_bashopts(env: &mut std::collections::HashMap<String, String>, shopt_options: &ShoptOptions) {
+    env.insert("BASHOPTS".to_string(), build_bashopts(shopt_options));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,5 +154,25 @@ mod tests {
         options.extglob = true;
         let result = build_bashopts(&options);
         assert!(result.contains("extglob"));
+    }
+
+    #[test]
+    fn test_update_shellopts() {
+        use std::collections::HashMap;
+        let mut env: HashMap<String, String> = HashMap::new();
+        let mut options = ShellOptions::default();
+        options.errexit = true;
+        update_shellopts(&mut env, &options);
+        assert!(env.get("SHELLOPTS").unwrap().contains("errexit"));
+    }
+
+    #[test]
+    fn test_update_bashopts() {
+        use std::collections::HashMap;
+        let mut env: HashMap<String, String> = HashMap::new();
+        let mut options = ShoptOptions::default();
+        options.extglob = true;
+        update_bashopts(&mut env, &options);
+        assert!(env.get("BASHOPTS").unwrap().contains("extglob"));
     }
 }

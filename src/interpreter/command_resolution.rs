@@ -124,6 +124,224 @@ impl Default for CommandHashTable {
     }
 }
 
+/// Context needed for command resolution (trait bounds for filesystem operations)
+pub trait CommandResolutionFs {
+    /// Resolve a path relative to cwd
+    fn resolve_path(&self, cwd: &str, path: &str) -> String;
+    /// Check if a file exists
+    fn exists(&self, path: &str) -> impl std::future::Future<Output = bool> + Send;
+    /// Get file stat (returns mode and is_directory)
+    fn stat(&self, path: &str) -> impl std::future::Future<Output = Option<FileStat>> + Send;
+}
+
+/// File stat information needed for command resolution
+#[derive(Debug, Clone)]
+pub struct FileStat {
+    pub is_directory: bool,
+    pub mode: u32,
+}
+
+/// Resolve a command name to its implementation via PATH lookup.
+///
+/// Resolution order:
+/// 1. If command contains "/", resolve as a path
+/// 2. Check hash table cache (unless pathOverride is set)
+/// 3. Search PATH directories for the command file
+/// 4. Fall back to registry lookup (for non-InMemoryFs filesystems)
+///
+/// # Arguments
+/// * `fs` - Filesystem implementation
+/// * `cwd` - Current working directory
+/// * `env_path` - PATH environment variable value (or None for default)
+/// * `hash_table` - Optional hash table for caching
+/// * `command_name` - Name of the command to resolve
+/// * `path_override` - Optional PATH override (for `command -p`)
+/// * `is_registered` - Function to check if a command is registered
+/// * `usr_bin_exists` - Whether /usr/bin exists (for fallback behavior)
+pub async fn resolve_command<F: CommandResolutionFs>(
+    fs: &F,
+    cwd: &str,
+    env_path: Option<&str>,
+    hash_table: Option<&mut CommandHashTable>,
+    command_name: &str,
+    path_override: Option<&str>,
+    is_registered: impl Fn(&str) -> bool,
+    usr_bin_exists: bool,
+) -> ResolveCommandResult {
+    // If command contains "/", it's a path - resolve directly
+    if is_path_command(command_name) {
+        let resolved_path = fs.resolve_path(cwd, command_name);
+
+        // Check if file exists
+        if !fs.exists(&resolved_path).await {
+            return ResolveCommandResult::NotFound { path: Some(resolved_path) };
+        }
+
+        // Extract command name from path
+        let cmd_name = command_name_from_path(&resolved_path);
+        let is_cmd_registered = is_registered(cmd_name);
+
+        // Check file properties
+        match fs.stat(&resolved_path).await {
+            Some(stat) => {
+                if stat.is_directory {
+                    // Trying to execute a directory
+                    return ResolveCommandResult::PermissionDenied { path: resolved_path };
+                }
+
+                // For registered commands (like /bin/echo), skip execute check
+                if is_cmd_registered {
+                    return ResolveCommandResult::Command { path: resolved_path };
+                }
+
+                // For non-registered commands, check if the file is executable
+                if !is_executable_mode(stat.mode) {
+                    return ResolveCommandResult::PermissionDenied { path: resolved_path };
+                }
+
+                // File exists and is executable - treat as user script
+                ResolveCommandResult::Script { path: resolved_path }
+            }
+            None => {
+                // If stat fails, treat as not found
+                ResolveCommandResult::NotFound { path: Some(resolved_path) }
+            }
+        }
+    } else {
+        // Check hash table first (unless pathOverride is set, which bypasses cache)
+        if path_override.is_none() {
+            if let Some(table) = hash_table {
+                if let Some(cached_path) = table.get(command_name).map(|s| s.to_string()) {
+                    // Verify the cached path still exists
+                    if fs.exists(&cached_path).await {
+                        if is_registered(command_name) {
+                            return ResolveCommandResult::Command { path: cached_path };
+                        }
+                        // Also check if it's an executable script
+                        if let Some(stat) = fs.stat(&cached_path).await {
+                            if !stat.is_directory && is_executable_mode(stat.mode) {
+                                return ResolveCommandResult::Script { path: cached_path };
+                            }
+                        }
+                    } else {
+                        // Remove stale entry from hash table
+                        table.remove(command_name);
+                    }
+                }
+            }
+        }
+
+        // Search PATH directories (use override if provided, for command -p)
+        let path_env = path_override.unwrap_or_else(|| env_path.unwrap_or(DEFAULT_PATH));
+        let path_dirs = split_path(path_env);
+
+        for dir in path_dirs {
+            // Resolve relative PATH directories against cwd
+            let resolved_dir = if dir.starts_with('/') {
+                dir.to_string()
+            } else {
+                fs.resolve_path(cwd, dir)
+            };
+            let full_path = build_command_path(&resolved_dir, command_name);
+
+            if fs.exists(&full_path).await {
+                // File exists - check if it's a directory
+                if let Some(stat) = fs.stat(&full_path).await {
+                    if stat.is_directory {
+                        continue; // Skip directories
+                    }
+
+                    let is_exec = is_executable_mode(stat.mode);
+                    let is_cmd_registered = is_registered(command_name);
+                    let is_sys_dir = is_system_directory(dir);
+
+                    if is_cmd_registered && is_sys_dir {
+                        // Registered commands in system directories work without execute bits
+                        return ResolveCommandResult::Command { path: full_path };
+                    }
+
+                    // For non-system directories (or non-registered commands), require executable
+                    if is_exec {
+                        if is_cmd_registered && !is_sys_dir {
+                            // User script shadows a registered command - treat as script
+                            return ResolveCommandResult::Script { path: full_path };
+                        }
+                        if !is_cmd_registered {
+                            // No registered handler - treat as user script
+                            return ResolveCommandResult::Script { path: full_path };
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback: check registry directly only if /usr/bin doesn't exist
+        if !usr_bin_exists && is_registered(command_name) {
+            return ResolveCommandResult::Command {
+                path: format!("/usr/bin/{}", command_name),
+            };
+        }
+
+        ResolveCommandResult::NotFound { path: None }
+    }
+}
+
+/// Find all paths for a command in PATH (for `which -a`).
+pub async fn find_command_in_path<F: CommandResolutionFs>(
+    fs: &F,
+    cwd: &str,
+    env_path: Option<&str>,
+    command_name: &str,
+) -> Vec<String> {
+    let mut paths = Vec::new();
+
+    // If command contains /, it's a path - check if it exists and is executable
+    if is_path_command(command_name) {
+        let resolved_path = fs.resolve_path(cwd, command_name);
+        if fs.exists(&resolved_path).await {
+            if let Some(stat) = fs.stat(&resolved_path).await {
+                if !stat.is_directory && is_executable_mode(stat.mode) {
+                    // Return the original path format (not resolved) to match bash behavior
+                    paths.push(command_name.to_string());
+                }
+            }
+        }
+        return paths;
+    }
+
+    let path_env = env_path.unwrap_or(DEFAULT_PATH);
+    let path_dirs = split_path(path_env);
+
+    for dir in path_dirs {
+        // Resolve relative PATH entries relative to cwd
+        let resolved_dir = if dir.starts_with('/') {
+            dir.to_string()
+        } else {
+            fs.resolve_path(cwd, dir)
+        };
+        let full_path = build_command_path(&resolved_dir, command_name);
+
+        if fs.exists(&full_path).await {
+            // Check if it's a directory - skip directories
+            if let Some(stat) = fs.stat(&full_path).await {
+                if stat.is_directory {
+                    continue;
+                }
+            } else {
+                continue;
+            }
+            // Return the original path format (relative if relative was given)
+            if dir.starts_with('/') {
+                paths.push(full_path);
+            } else {
+                paths.push(build_command_path(dir, command_name));
+            }
+        }
+    }
+
+    paths
+}
+
 /// Command type classification
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandType {

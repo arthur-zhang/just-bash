@@ -3,7 +3,7 @@
 //! Handles execution of subshells (...), groups { ...; }, and user scripts
 
 use std::collections::HashMap;
-use crate::interpreter::types::{ExecResult, InterpreterState, ShellOptions};
+use crate::interpreter::types::{ExecResult, InterpreterState, LocalVarStackEntry, ShellOptions};
 
 /// Saved state for subshell execution.
 /// Used to restore the parent environment after subshell completes.
@@ -18,6 +18,11 @@ pub struct SubshellSavedState {
     pub bash_pid: u32,
     pub group_stdin: Option<String>,
     pub current_source: Option<String>,
+    // Local variable scoping state - subshell gets a copy, changes don't affect parent
+    pub local_scopes: Vec<HashMap<String, Option<String>>>,
+    pub local_var_stack: Option<HashMap<String, Vec<LocalVarStackEntry>>>,
+    pub local_var_depth: Option<HashMap<String, u32>>,
+    pub fully_unset_locals: Option<HashMap<String, usize>>,
 }
 
 impl SubshellSavedState {
@@ -33,6 +38,11 @@ impl SubshellSavedState {
             bash_pid: state.bash_pid,
             group_stdin: state.group_stdin.clone(),
             current_source: state.current_source.clone(),
+            // Save local scoping state
+            local_scopes: state.local_scopes.clone(),
+            local_var_stack: state.local_var_stack.clone(),
+            local_var_depth: state.local_var_depth.clone(),
+            fully_unset_locals: state.fully_unset_locals.clone(),
         }
     }
 
@@ -47,6 +57,11 @@ impl SubshellSavedState {
         state.bash_pid = self.bash_pid;
         state.group_stdin = self.group_stdin;
         state.current_source = self.current_source;
+        // Restore local scoping state
+        state.local_scopes = self.local_scopes;
+        state.local_var_stack = self.local_var_stack;
+        state.local_var_depth = self.local_var_depth;
+        state.fully_unset_locals = self.fully_unset_locals;
     }
 }
 
@@ -54,6 +69,15 @@ impl SubshellSavedState {
 /// Returns the saved state that should be restored after execution.
 pub fn prepare_subshell(state: &mut InterpreterState, stdin: Option<&str>) -> SubshellSavedState {
     let saved = SubshellSavedState::save(state);
+
+    // Deep copy the local scoping structures for the subshell
+    // Subshell gets a copy of these, but changes don't affect parent
+    // Note: state.local_scopes is already cloned in save(), but we need to ensure
+    // the subshell has its own independent copy (which clone() provides for Vec<HashMap>)
+
+    // For local_var_stack, we need a deep copy where each entry is also cloned
+    // The clone() on Option<HashMap<String, Vec<LocalVarStackEntry>>> already does this
+    // since LocalVarStackEntry derives Clone
 
     // Reset loopDepth in subshell - break/continue should not affect parent loops
     state.parent_has_loop_context = Some(saved.loop_depth > 0);

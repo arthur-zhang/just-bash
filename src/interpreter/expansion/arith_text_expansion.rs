@@ -229,6 +229,149 @@ pub fn expand_subscript_for_assoc_array(state: &InterpreterState, subscript: &st
     result
 }
 
+/// Result of command substitution expansion.
+#[derive(Debug, Clone, Default)]
+pub struct SubscriptExpansionResult {
+    pub value: String,
+    pub stderr: String,
+}
+
+/// Expand variable references and command substitutions in an array subscript
+/// with command execution support.
+///
+/// # Arguments
+/// * `state` - The interpreter state
+/// * `subscript` - The subscript string to expand
+/// * `exec_fn` - Optional function to execute command substitutions
+///
+/// # Returns
+/// The expanded subscript value and any stderr output.
+pub fn expand_subscript_for_assoc_array_with_exec<F>(
+    state: &InterpreterState,
+    subscript: &str,
+    exec_fn: Option<F>,
+) -> SubscriptExpansionResult
+where
+    F: Fn(&str) -> (String, String, i32), // (stdout, stderr, exit_code)
+{
+    // Remove surrounding quotes if present
+    let inner: &str;
+    let has_double_quotes = subscript.starts_with('"') && subscript.ends_with('"');
+    let has_single_quotes = subscript.starts_with('\'') && subscript.ends_with('\'');
+
+    if has_double_quotes || has_single_quotes {
+        inner = &subscript[1..subscript.len() - 1];
+    } else {
+        inner = subscript;
+    }
+
+    // For single-quoted strings, no expansion
+    if has_single_quotes {
+        return SubscriptExpansionResult {
+            value: inner.to_string(),
+            stderr: String::new(),
+        };
+    }
+
+    // Expand $var references and command substitutions in the string
+    let mut result = String::new();
+    let mut stderr = String::new();
+    let chars: Vec<char> = inner.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i] == '$' {
+            // Check for $(...) command substitution
+            if i + 1 < chars.len() && chars[i + 1] == '(' {
+                // Find matching closing paren
+                let mut depth = 1;
+                let mut j = i + 2;
+                while j < chars.len() && depth > 0 {
+                    if chars[j] == '(' && j > 0 && chars[j - 1] == '$' {
+                        depth += 1;
+                    } else if chars[j] == '(' {
+                        depth += 1;
+                    } else if chars[j] == ')' {
+                        depth -= 1;
+                    }
+                    j += 1;
+                }
+                // Extract and execute the command
+                let cmd_str: String = chars[i + 2..j - 1].iter().collect();
+                if let Some(ref exec) = exec_fn {
+                    let (stdout, cmd_stderr, _) = exec(&cmd_str);
+                    // Strip trailing newlines like command substitution does
+                    result.push_str(stdout.trim_end_matches('\n'));
+                    if !cmd_stderr.is_empty() {
+                        stderr.push_str(&cmd_stderr);
+                    }
+                } else {
+                    // Keep as-is if no exec function
+                    let segment: String = chars[i..j].iter().collect();
+                    result.push_str(&segment);
+                }
+                i = j;
+            } else if i + 1 < chars.len() && chars[i + 1] == '{' {
+                // Check for ${...} - find matching }
+                let mut depth = 1;
+                let mut j = i + 2;
+                while j < chars.len() && depth > 0 {
+                    if chars[j] == '{' {
+                        depth += 1;
+                    } else if chars[j] == '}' {
+                        depth -= 1;
+                    }
+                    j += 1;
+                }
+                let var_expr: String = chars[i + 2..j - 1].iter().collect();
+                // Use get_variable to properly handle array expansions
+                let value = get_variable(state, &var_expr);
+                result.push_str(&value);
+                i = j;
+            } else if i + 1 < chars.len()
+                && (chars[i + 1].is_ascii_alphabetic() || chars[i + 1] == '_')
+            {
+                // $name - find end of name
+                let mut j = i + 1;
+                while j < chars.len() && (chars[j].is_ascii_alphanumeric() || chars[j] == '_') {
+                    j += 1;
+                }
+                let var_name: String = chars[i + 1..j].iter().collect();
+                let value = get_variable(state, &var_name);
+                result.push_str(&value);
+                i = j;
+            } else {
+                result.push(chars[i]);
+                i += 1;
+            }
+        } else if chars[i] == '`' {
+            // Legacy backtick command substitution
+            let mut j = i + 1;
+            while j < chars.len() && chars[j] != '`' {
+                j += 1;
+            }
+            let cmd_str: String = chars[i + 1..j].iter().collect();
+            if let Some(ref exec) = exec_fn {
+                let (stdout, cmd_stderr, _) = exec(&cmd_str);
+                result.push_str(stdout.trim_end_matches('\n'));
+                if !cmd_stderr.is_empty() {
+                    stderr.push_str(&cmd_stderr);
+                }
+            } else {
+                // Keep as-is if no exec function
+                let segment: String = chars[i..j + 1].iter().collect();
+                result.push_str(&segment);
+            }
+            i = j + 1;
+        } else {
+            result.push(chars[i]);
+            i += 1;
+        }
+    }
+
+    SubscriptExpansionResult { value: result, stderr }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,5 +419,36 @@ mod tests {
         assert_eq!(expand_subscript_for_assoc_array(&state, "\"$foo\""), "bar");
         // Single-quoted - no expansion
         assert_eq!(expand_subscript_for_assoc_array(&state, "'$foo'"), "$foo");
+    }
+
+    #[test]
+    fn test_expand_subscript_with_exec() {
+        let state = make_state();
+        // With exec function that returns "hello"
+        let exec_fn = |_cmd: &str| ("hello\n".to_string(), String::new(), 0);
+        let result = expand_subscript_for_assoc_array_with_exec(&state, "$(echo hello)", Some(exec_fn));
+        assert_eq!(result.value, "hello");
+        assert!(result.stderr.is_empty());
+    }
+
+    #[test]
+    fn test_expand_subscript_with_exec_backtick() {
+        let state = make_state();
+        // With exec function for backtick
+        let exec_fn = |_cmd: &str| ("world\n".to_string(), String::new(), 0);
+        let result = expand_subscript_for_assoc_array_with_exec(&state, "`echo world`", Some(exec_fn));
+        assert_eq!(result.value, "world");
+    }
+
+    #[test]
+    fn test_expand_subscript_without_exec() {
+        let state = make_state();
+        // Without exec function - command substitution kept as-is
+        let result = expand_subscript_for_assoc_array_with_exec::<fn(&str) -> (String, String, i32)>(
+            &state,
+            "$(echo hello)",
+            None,
+        );
+        assert_eq!(result.value, "$(echo hello)");
     }
 }

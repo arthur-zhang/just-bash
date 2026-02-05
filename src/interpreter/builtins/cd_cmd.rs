@@ -18,7 +18,7 @@ pub fn handle_cd(
 ) -> ExecResult {
     let mut target: String;
     let mut print_path = false;
-    let mut _physical = false;
+    let mut physical = false;
 
     // Parse options
     let mut i = 0;
@@ -29,10 +29,10 @@ pub fn handle_cd(
             i += 1;
             break;
         } else if arg == "-L" {
-            _physical = false;
+            physical = false;
             i += 1;
         } else if arg == "-P" {
-            _physical = true;
+            physical = true;
             i += 1;
         } else if arg.starts_with('-') && arg != "-" {
             // Unknown option - ignore for now
@@ -100,15 +100,25 @@ pub fn handle_cd(
         return failure(&format!("bash: cd: {}: Not a directory\n", target));
     }
 
+    // If -P is specified, resolve symlinks to get the physical path
+    let final_dir = if physical {
+        match std::fs::canonicalize(&new_dir) {
+            Ok(canonical) => canonical.to_string_lossy().to_string(),
+            Err(_) => new_dir.clone(), // If canonicalize fails, use the logical path
+        }
+    } else {
+        new_dir.clone()
+    };
+
     // Update state
     state.previous_dir = state.cwd.clone();
-    state.cwd = new_dir.clone();
+    state.cwd = final_dir.clone();
     state.env.insert("PWD".to_string(), state.cwd.clone());
     state.env.insert("OLDPWD".to_string(), state.previous_dir.clone());
 
     // cd - prints the new directory
     if print_path {
-        result(&format!("{}\n", new_dir), "", 0)
+        result(&format!("{}\n", final_dir), "", 0)
     } else {
         result("", "", 0)
     }
@@ -147,5 +157,57 @@ mod tests {
         assert_eq!(normalize_path("/foo/bar/.."), "/foo");
         assert_eq!(normalize_path("/foo/bar/../.."), "/");
         assert_eq!(normalize_path("/foo//bar"), "/foo/bar");
+    }
+
+    #[test]
+    fn test_handle_cd_to_tmp() {
+        let mut state = InterpreterState::default();
+        state.cwd = "/".to_string();
+        state.env.insert("HOME".to_string(), "/tmp".to_string());
+
+        // cd to /tmp
+        let result = handle_cd(&mut state, &["tmp".to_string()]);
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(state.cwd, "/tmp");
+        assert_eq!(state.env.get("PWD"), Some(&"/tmp".to_string()));
+    }
+
+    #[test]
+    fn test_handle_cd_home() {
+        let mut state = InterpreterState::default();
+        state.cwd = "/var".to_string();
+        state.env.insert("HOME".to_string(), "/tmp".to_string());
+
+        // cd with no args goes to HOME
+        let result = handle_cd(&mut state, &[]);
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(state.cwd, "/tmp");
+    }
+
+    #[test]
+    fn test_handle_cd_previous() {
+        let mut state = InterpreterState::default();
+        state.cwd = "/tmp".to_string();
+        state.previous_dir = "/var".to_string();
+
+        // cd - goes to previous directory
+        let result = handle_cd(&mut state, &["-".to_string()]);
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(state.cwd, "/var");
+        // Should print the new directory
+        assert!(result.stdout.contains("/var"));
+    }
+
+    #[test]
+    fn test_handle_cd_physical_option() {
+        let mut state = InterpreterState::default();
+        state.cwd = "/".to_string();
+
+        // cd -P to /tmp (should resolve symlinks)
+        let result = handle_cd(&mut state, &["-P".to_string(), "tmp".to_string()]);
+        assert_eq!(result.exit_code, 0);
+        // The path should be resolved (on macOS /tmp is a symlink to /private/tmp)
+        // We just check that it succeeded and the path is set
+        assert!(!state.cwd.is_empty());
     }
 }

@@ -74,7 +74,54 @@ pub fn dispatch_builtin(
         "help" => {
             return Some(handle_help_stub(dispatch_ctx.state, args));
         }
+        "unset" => {
+            return Some(handle_unset_stub(dispatch_ctx.state, args));
+        }
+        "local" => {
+            return Some(handle_local_stub(dispatch_ctx.state, args));
+        }
+        "getopts" => {
+            return Some(handle_getopts_stub(dispatch_ctx.state, args));
+        }
+        "compgen" => {
+            return Some(handle_compgen_stub(dispatch_ctx.state, args));
+        }
+        "complete" => {
+            return Some(handle_complete_stub(dispatch_ctx.state, args));
+        }
+        "compopt" => {
+            return Some(handle_compopt_stub(dispatch_ctx.state, args));
+        }
+        "pushd" => {
+            return Some(handle_pushd_stub(dispatch_ctx.state, args));
+        }
+        "popd" => {
+            return Some(handle_popd_stub(dispatch_ctx.state, args));
+        }
+        "dirs" => {
+            return Some(handle_dirs_stub(dispatch_ctx.state, args));
+        }
+        "source" | "." => {
+            return Some(handle_source_stub(dispatch_ctx.state, args));
+        }
+        "read" => {
+            return Some(handle_read_stub(dispatch_ctx.state, args, stdin));
+        }
+        "mapfile" | "readarray" => {
+            return Some(handle_mapfile_stub(dispatch_ctx.state, args, stdin));
+        }
+        "declare" | "typeset" => {
+            return Some(handle_declare_stub(dispatch_ctx.state, args));
+        }
+        "readonly" => {
+            return Some(handle_readonly_stub(dispatch_ctx.state, args));
+        }
         _ => {}
+    }
+
+    // In POSIX mode, eval is a special builtin that cannot be overridden by functions
+    if command_name == "eval" && dispatch_ctx.state.options.posix {
+        return Some(handle_eval_stub(dispatch_ctx.state, args, stdin));
     }
 
     // User-defined functions override most builtins (except special ones above)
@@ -109,6 +156,21 @@ pub fn dispatch_builtin(
         }
         "wait" => {
             return Some(OK);
+        }
+        "eval" => {
+            return Some(handle_eval_stub(dispatch_ctx.state, args, stdin));
+        }
+        "cd" => {
+            return Some(handle_cd_stub(dispatch_ctx.state, args));
+        }
+        "let" => {
+            return Some(handle_let_stub(dispatch_ctx.state, args));
+        }
+        "type" => {
+            return Some(handle_type_stub(dispatch_ctx.state, args));
+        }
+        "hash" => {
+            return Some(handle_hash_stub(dispatch_ctx.state, args));
         }
         "[" | "test" => {
             let mut test_args = args.to_vec();
@@ -454,6 +516,515 @@ fn handle_command_v_stub(
     }
 
     ExecResult::new(stdout, String::new(), exit_code)
+}
+
+fn handle_unset_stub(state: &mut InterpreterState, args: &[String]) -> ExecResult {
+    let mut unset_functions = false;
+    let mut unset_variables = true;
+    let mut names: Vec<&str> = Vec::new();
+
+    for arg in args {
+        match arg.as_str() {
+            "-f" => {
+                unset_functions = true;
+                unset_variables = false;
+            }
+            "-v" => {
+                unset_variables = true;
+                unset_functions = false;
+            }
+            "-n" => {
+                // unset nameref attribute - stub: treat as -v
+            }
+            _ if arg.starts_with('-') => {}
+            _ => names.push(arg),
+        }
+    }
+
+    for name in names {
+        if unset_functions {
+            state.functions.remove(name);
+        }
+        if unset_variables {
+            state.env.remove(name);
+            if let Some(ref mut exported) = state.exported_vars {
+                exported.remove(name);
+            }
+            if let Some(ref mut readonly) = state.readonly_vars {
+                if readonly.contains(name) {
+                    return failure(format!("bash: unset: {}: cannot unset: readonly variable\n", name));
+                }
+            }
+        }
+    }
+    OK
+}
+
+fn handle_local_stub(state: &mut InterpreterState, args: &[String]) -> ExecResult {
+    if state.call_depth == 0 {
+        return failure("bash: local: can only be used in a function\n");
+    }
+
+    for arg in args {
+        if arg.starts_with('-') {
+            continue;
+        }
+        if let Some(eq_pos) = arg.find('=') {
+            let name = &arg[..eq_pos];
+            let value = &arg[eq_pos + 1..];
+            state.env.insert(name.to_string(), value.to_string());
+        } else {
+            // Declare as local without value
+            if !state.env.contains_key(arg) {
+                state.env.insert(arg.clone(), String::new());
+            }
+        }
+    }
+    OK
+}
+
+fn handle_cd_stub(state: &mut InterpreterState, args: &[String]) -> ExecResult {
+    let target = if args.is_empty() {
+        state.env.get("HOME").cloned().unwrap_or_else(|| "/".to_string())
+    } else if args[0] == "-" {
+        let prev = state.previous_dir.clone();
+        if prev.is_empty() {
+            return failure("bash: cd: OLDPWD not set\n");
+        }
+        prev
+    } else {
+        args[0].clone()
+    };
+
+    state.previous_dir = state.cwd.clone();
+    state.cwd = target;
+    state.env.insert("PWD".to_string(), state.cwd.clone());
+    state.env.insert("OLDPWD".to_string(), state.previous_dir.clone());
+    OK
+}
+
+fn handle_eval_stub(_state: &mut InterpreterState, _args: &[String], _stdin: &str) -> ExecResult {
+    // Stub: eval requires re-parsing and executing concatenated args
+    // Full implementation would call the parser and interpreter recursively
+    OK
+}
+
+fn handle_getopts_stub(state: &mut InterpreterState, args: &[String]) -> ExecResult {
+    if args.len() < 2 {
+        return failure("bash: getopts: usage: getopts optstring name [arg ...]\n");
+    }
+
+    let _optstring = &args[0];
+    let varname = &args[1];
+
+    // Stub: set variable to '?' to indicate end of options
+    state.env.insert(varname.clone(), "?".to_string());
+    test_result(false)
+}
+
+fn handle_compgen_stub(_state: &mut InterpreterState, _args: &[String]) -> ExecResult {
+    // Stub: compgen generates possible completions
+    OK
+}
+
+fn handle_complete_stub(state: &mut InterpreterState, args: &[String]) -> ExecResult {
+    use crate::interpreter::types::CompletionSpec;
+    
+    let mut wordlist: Option<String> = None;
+    let mut function: Option<String> = None;
+    let mut command_names: Vec<String> = Vec::new();
+    let mut iter = args.iter().peekable();
+
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "-W" => {
+                if let Some(val) = iter.next() {
+                    wordlist = Some(val.clone());
+                }
+            }
+            "-F" => {
+                if let Some(val) = iter.next() {
+                    function = Some(val.clone());
+                }
+            }
+            _ if arg.starts_with('-') => {
+                // Skip other options
+            }
+            _ => command_names.push(arg.clone()),
+        }
+    }
+
+    if state.completion_specs.is_none() {
+        state.completion_specs = Some(std::collections::HashMap::new());
+    }
+
+    for cmd in command_names {
+        let spec = CompletionSpec {
+            wordlist: wordlist.clone(),
+            function: function.clone(),
+            ..Default::default()
+        };
+        if let Some(ref mut specs) = state.completion_specs {
+            specs.insert(cmd, spec);
+        }
+    }
+    OK
+}
+
+fn handle_compopt_stub(_state: &mut InterpreterState, _args: &[String]) -> ExecResult {
+    // Stub: compopt modifies completion options
+    OK
+}
+
+fn handle_pushd_stub(state: &mut InterpreterState, args: &[String]) -> ExecResult {
+    if state.directory_stack.is_none() {
+        state.directory_stack = Some(Vec::new());
+    }
+
+    let dir = if args.is_empty() {
+        // Swap top two directories
+        if let Some(ref mut stack) = state.directory_stack {
+            if stack.is_empty() {
+                return failure("bash: pushd: no other directory\n");
+            }
+            let top = stack.pop().unwrap();
+            let current = state.cwd.clone();
+            stack.push(current);
+            top
+        } else {
+            return failure("bash: pushd: no other directory\n");
+        }
+    } else {
+        args[0].clone()
+    };
+
+    if let Some(ref mut stack) = state.directory_stack {
+        stack.push(state.cwd.clone());
+    }
+    state.previous_dir = state.cwd.clone();
+    state.cwd = dir;
+    state.env.insert("PWD".to_string(), state.cwd.clone());
+    OK
+}
+
+fn handle_popd_stub(state: &mut InterpreterState, _args: &[String]) -> ExecResult {
+    if state.directory_stack.is_none() {
+        return failure("bash: popd: directory stack empty\n");
+    }
+
+    if let Some(ref mut stack) = state.directory_stack {
+        if stack.is_empty() {
+            return failure("bash: popd: directory stack empty\n");
+        }
+        let dir = stack.pop().unwrap();
+        state.previous_dir = state.cwd.clone();
+        state.cwd = dir;
+        state.env.insert("PWD".to_string(), state.cwd.clone());
+    }
+    OK
+}
+
+fn handle_dirs_stub(state: &InterpreterState, _args: &[String]) -> ExecResult {
+    let mut stdout = state.cwd.clone();
+    if let Some(ref stack) = state.directory_stack {
+        for dir in stack.iter().rev() {
+            stdout.push(' ');
+            stdout.push_str(dir);
+        }
+    }
+    stdout.push('\n');
+    ExecResult::new(stdout, String::new(), 0)
+}
+
+fn handle_source_stub(_state: &mut InterpreterState, args: &[String]) -> ExecResult {
+    if args.is_empty() {
+        return failure("bash: source: filename argument required\n");
+    }
+    // Stub: full implementation would read and execute the file
+    OK
+}
+
+fn handle_read_stub(state: &mut InterpreterState, args: &[String], stdin: &str) -> ExecResult {
+    let mut varnames: Vec<&str> = Vec::new();
+    let mut prompt: Option<&str> = None;
+    let mut iter = args.iter().peekable();
+
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "-p" => {
+                if let Some(p) = iter.next() {
+                    prompt = Some(p.as_str());
+                }
+            }
+            "-r" | "-s" | "-n" | "-t" | "-d" | "-a" | "-u" => {
+                // Skip option and its argument if present
+                if matches!(arg.as_str(), "-n" | "-t" | "-d" | "-a" | "-u") {
+                    iter.next();
+                }
+            }
+            _ if arg.starts_with('-') => {}
+            _ => varnames.push(arg),
+        }
+    }
+
+    if varnames.is_empty() {
+        varnames.push("REPLY");
+    }
+
+    let _ = prompt; // Would print prompt in interactive mode
+
+    let line = stdin.lines().next().unwrap_or("");
+    let parts: Vec<&str> = line.split_whitespace().collect();
+
+    for (i, varname) in varnames.iter().enumerate() {
+        if i < varnames.len() - 1 {
+            let value = parts.get(i).unwrap_or(&"");
+            state.env.insert(varname.to_string(), value.to_string());
+        } else {
+            // Last variable gets the rest of the line
+            let rest: Vec<&str> = parts.iter().skip(i).copied().collect();
+            state.env.insert(varname.to_string(), rest.join(" "));
+        }
+    }
+
+    if stdin.is_empty() {
+        test_result(false)
+    } else {
+        OK
+    }
+}
+
+fn handle_mapfile_stub(state: &mut InterpreterState, args: &[String], stdin: &str) -> ExecResult {
+    let mut array_name = "MAPFILE".to_string();
+    let mut iter = args.iter().peekable();
+
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "-t" | "-s" | "-n" | "-O" | "-d" | "-c" | "-C" | "-u" => {
+                // Skip options that take arguments
+                if matches!(arg.as_str(), "-s" | "-n" | "-O" | "-d" | "-c" | "-C" | "-u") {
+                    iter.next();
+                }
+            }
+            _ if arg.starts_with('-') => {}
+            _ => array_name = arg.clone(),
+        }
+    }
+
+    // Store lines as indexed array elements
+    for (i, line) in stdin.lines().enumerate() {
+        let key = format!("{}[{}]", array_name, i);
+        state.env.insert(key, line.to_string());
+    }
+
+    OK
+}
+
+fn handle_declare_stub(state: &mut InterpreterState, args: &[String]) -> ExecResult {
+    let mut is_integer = false;
+    let mut is_readonly = false;
+    let mut is_export = false;
+    let mut is_lowercase = false;
+    let mut is_uppercase = false;
+    let mut names_and_values: Vec<&str> = Vec::new();
+
+    for arg in args {
+        if arg.starts_with('-') {
+            for ch in arg[1..].chars() {
+                match ch {
+                    'i' => is_integer = true,
+                    'r' => is_readonly = true,
+                    'x' => is_export = true,
+                    'l' => is_lowercase = true,
+                    'u' => is_uppercase = true,
+                    'a' | 'A' | 'n' | 'g' | 'f' | 'p' => {}
+                    _ => {}
+                }
+            }
+        } else if arg.starts_with('+') {
+            // Remove attributes - stub
+        } else {
+            names_and_values.push(arg);
+        }
+    }
+
+    for item in names_and_values {
+        let (name, value) = if let Some(eq_pos) = item.find('=') {
+            (&item[..eq_pos], Some(&item[eq_pos + 1..]))
+        } else {
+            (item, None)
+        };
+
+        if let Some(val) = value {
+            let mut final_val = val.to_string();
+            if is_lowercase {
+                final_val = final_val.to_lowercase();
+            }
+            if is_uppercase {
+                final_val = final_val.to_uppercase();
+            }
+            state.env.insert(name.to_string(), final_val);
+        }
+
+        if is_integer {
+            if state.integer_vars.is_none() {
+                state.integer_vars = Some(std::collections::HashSet::new());
+            }
+            if let Some(ref mut set) = state.integer_vars {
+                set.insert(name.to_string());
+            }
+        }
+
+        if is_readonly {
+            if state.readonly_vars.is_none() {
+                state.readonly_vars = Some(std::collections::HashSet::new());
+            }
+            if let Some(ref mut set) = state.readonly_vars {
+                set.insert(name.to_string());
+            }
+        }
+
+        if is_export {
+            if state.exported_vars.is_none() {
+                state.exported_vars = Some(std::collections::HashSet::new());
+            }
+            if let Some(ref mut set) = state.exported_vars {
+                set.insert(name.to_string());
+            }
+        }
+
+        if is_lowercase {
+            if state.lowercase_vars.is_none() {
+                state.lowercase_vars = Some(std::collections::HashSet::new());
+            }
+            if let Some(ref mut set) = state.lowercase_vars {
+                set.insert(name.to_string());
+            }
+        }
+
+        if is_uppercase {
+            if state.uppercase_vars.is_none() {
+                state.uppercase_vars = Some(std::collections::HashSet::new());
+            }
+            if let Some(ref mut set) = state.uppercase_vars {
+                set.insert(name.to_string());
+            }
+        }
+    }
+
+    OK
+}
+
+fn handle_readonly_stub(state: &mut InterpreterState, args: &[String]) -> ExecResult {
+    for arg in args {
+        if arg.starts_with('-') {
+            continue;
+        }
+
+        let (name, value) = if let Some(eq_pos) = arg.find('=') {
+            (&arg[..eq_pos], Some(&arg[eq_pos + 1..]))
+        } else {
+            (arg.as_str(), None)
+        };
+
+        if let Some(val) = value {
+            state.env.insert(name.to_string(), val.to_string());
+        }
+
+        if state.readonly_vars.is_none() {
+            state.readonly_vars = Some(std::collections::HashSet::new());
+        }
+        if let Some(ref mut set) = state.readonly_vars {
+            set.insert(name.to_string());
+        }
+    }
+    OK
+}
+
+fn handle_type_stub(state: &InterpreterState, args: &[String]) -> ExecResult {
+    let mut stdout = String::new();
+    let mut exit_code = 0;
+
+    for name in args {
+        if name.starts_with('-') {
+            continue;
+        }
+
+        if SHELL_BUILTINS.contains(name.as_str()) {
+            stdout.push_str(&format!("{} is a shell builtin\n", name));
+        } else if state.functions.contains_key(name) {
+            stdout.push_str(&format!("{} is a function\n", name));
+        } else if let Some(ref aliases) = state.aliases {
+            if let Some(alias_val) = aliases.get(name) {
+                stdout.push_str(&format!("{} is aliased to `{}'\n", name, alias_val));
+            } else {
+                stdout.push_str(&format!("bash: type: {}: not found\n", name));
+                exit_code = 1;
+            }
+        } else {
+            stdout.push_str(&format!("bash: type: {}: not found\n", name));
+            exit_code = 1;
+        }
+    }
+
+    ExecResult::new(stdout, String::new(), exit_code)
+}
+
+fn handle_hash_stub(state: &mut InterpreterState, args: &[String]) -> ExecResult {
+    if args.is_empty() {
+        // List hash table
+        let mut stdout = String::new();
+        if let Some(ref table) = state.hash_table {
+            for (name, path) in table {
+                stdout.push_str(&format!("{}\t{}\n", name, path));
+            }
+        }
+        return ExecResult::new(stdout, String::new(), 0);
+    }
+
+    for arg in args {
+        match arg.as_str() {
+            "-r" => {
+                // Clear hash table
+                state.hash_table = None;
+            }
+            "-d" => {
+                // Next arg is name to delete - simplified
+            }
+            "-t" | "-l" | "-p" => {
+                // Other options - stub
+            }
+            _ if arg.starts_with('-') => {}
+            _ => {
+                // Would look up command in PATH and cache
+            }
+        }
+    }
+    OK
+}
+
+fn handle_let_stub(state: &mut InterpreterState, args: &[String]) -> ExecResult {
+    if args.is_empty() {
+        return test_result(false);
+    }
+
+    let mut last_result: i64 = 0;
+
+    for expr in args {
+        // Simple arithmetic evaluation - handles basic cases
+        if let Some(eq_pos) = expr.find('=') {
+            let name = &expr[..eq_pos];
+            let value_str = &expr[eq_pos + 1..];
+            if let Ok(val) = value_str.parse::<i64>() {
+                state.env.insert(name.to_string(), val.to_string());
+                last_result = val;
+            }
+        } else if let Ok(val) = expr.parse::<i64>() {
+            last_result = val;
+        }
+    }
+
+    test_result(last_result != 0)
 }
 
 #[cfg(test)]

@@ -512,6 +512,217 @@ pub fn escape_regex_chars(s: &str) -> String {
     result
 }
 
+// ============================================================================
+// Test/[ Command Evaluation
+// ============================================================================
+
+use crate::interpreter::helpers::string_compare::{compare_strings_str, is_string_compare_op};
+use crate::interpreter::helpers::numeric_compare::{compare_numeric_str, is_numeric_op};
+use crate::interpreter::helpers::string_tests::{evaluate_string_test_str, is_string_test_op};
+use crate::interpreter::helpers::file_tests::{
+    evaluate_file_test_str, is_file_test_operator,
+    evaluate_binary_file_test_str, is_binary_file_test_operator,
+    FileSystem,
+};
+
+/// Result of a test expression evaluation.
+#[derive(Debug, Clone)]
+pub struct TestResult {
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: i32,
+}
+
+impl TestResult {
+    pub fn new(exit_code: i32) -> Self {
+        Self {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code,
+        }
+    }
+
+    pub fn success() -> Self {
+        Self::new(0)
+    }
+
+    pub fn failure() -> Self {
+        Self::new(1)
+    }
+
+    pub fn from_bool(value: bool) -> Self {
+        Self::new(if value { 0 } else { 1 })
+    }
+
+    pub fn error(message: &str) -> Self {
+        Self {
+            stdout: String::new(),
+            stderr: message.to_string(),
+            exit_code: 2,
+        }
+    }
+}
+
+/// Evaluate test/[ command arguments.
+///
+/// # Arguments
+/// * `state` - Interpreter state
+/// * `args` - Pre-expanded arguments (without the command name or trailing ])
+/// * `fs` - File system implementation for file tests
+/// * `variable_test` - Function to test if a variable is set (-v test)
+///
+/// # Returns
+/// TestResult with exit code 0 (true), 1 (false), or 2 (error)
+pub fn evaluate_test_args<F, V>(
+    state: &InterpreterState,
+    args: &[String],
+    fs: &F,
+    variable_test: V,
+) -> TestResult
+where
+    F: FileSystem,
+    V: Fn(&InterpreterState, &str) -> bool,
+{
+    if args.is_empty() {
+        return TestResult::failure();
+    }
+
+    if args.len() == 1 {
+        // Single argument: true if non-empty
+        return TestResult::from_bool(!args[0].is_empty());
+    }
+
+    if args.len() == 2 {
+        let op = &args[0];
+        let operand = &args[1];
+
+        // "(" without matching ")" is a syntax error
+        if op == "(" {
+            return TestResult::error("test: '(' without matching ')'\n");
+        }
+
+        // File test operators
+        if is_file_test_operator(op) {
+            return TestResult::from_bool(
+                evaluate_file_test_str(fs, &state.cwd, op, operand).unwrap_or(false)
+            );
+        }
+
+        // String test operators
+        if is_string_test_op(op) {
+            return TestResult::from_bool(evaluate_string_test_str(op, operand).unwrap_or(false));
+        }
+
+        // Negation
+        if op == "!" {
+            return TestResult::from_bool(operand.is_empty());
+        }
+
+        // Variable test
+        if op == "-v" {
+            return TestResult::from_bool(variable_test(state, operand));
+        }
+
+        // Shell option test
+        if op == "-o" {
+            return TestResult::from_bool(evaluate_shell_option(state, operand));
+        }
+
+        // Binary operator used in 2-arg context is an error
+        if is_string_compare_op(op) || is_numeric_op(op) || is_binary_file_test_operator(op) {
+            return TestResult::error(&format!("test: {}: unary operator expected\n", op));
+        }
+
+        return TestResult::failure();
+    }
+
+    if args.len() == 3 {
+        let left = &args[0];
+        let op = &args[1];
+        let right = &args[2];
+
+        // String comparisons (no pattern matching in test/[)
+        if is_string_compare_op(op) {
+            return TestResult::from_bool(compare_strings_str(op, left, right).unwrap_or(false));
+        }
+
+        // Numeric comparisons
+        if is_numeric_op(op) {
+            let left_num = parse_numeric_decimal(left);
+            let right_num = parse_numeric_decimal(right);
+            if !left_num.valid || !right_num.valid {
+                return TestResult::new(2);
+            }
+            return TestResult::from_bool(compare_numeric_str(op, left_num.value, right_num.value).unwrap_or(false));
+        }
+
+        // Binary file tests
+        if is_binary_file_test_operator(op) {
+            return TestResult::from_bool(
+                evaluate_binary_file_test_str(fs, &state.cwd, op, left, right).unwrap_or(false)
+            );
+        }
+
+        // Special operators
+        match op.as_str() {
+            "-a" => {
+                // Binary AND: both operands must be non-empty
+                return TestResult::from_bool(!left.is_empty() && !right.is_empty());
+            }
+            "-o" => {
+                // Binary OR: at least one operand must be non-empty
+                return TestResult::from_bool(!left.is_empty() || !right.is_empty());
+            }
+            ">" => {
+                // String comparison: left > right (lexicographically)
+                return TestResult::from_bool(left > right);
+            }
+            "<" => {
+                // String comparison: left < right (lexicographically)
+                return TestResult::from_bool(left < right);
+            }
+            _ => {}
+        }
+
+        // If $1 is '!', negate the 2-argument test
+        if left == "!" {
+            let neg_result = evaluate_test_args(state, &[op.clone(), right.clone()], fs, &variable_test);
+            return TestResult::new(match neg_result.exit_code {
+                0 => 1,
+                1 => 0,
+                _ => neg_result.exit_code,
+            });
+        }
+
+        // If $1 is '(' and $3 is ')', evaluate $2 as single-arg test
+        if left == "(" && right == ")" {
+            return TestResult::from_bool(!op.is_empty());
+        }
+    }
+
+    // 4-argument rules
+    if args.len() == 4 {
+        // If $1 is '!', negate the 3-argument expression
+        if args[0] == "!" {
+            let neg_result = evaluate_test_args(state, &args[1..].to_vec(), fs, &variable_test);
+            return TestResult::new(match neg_result.exit_code {
+                0 => 1,
+                1 => 0,
+                _ => neg_result.exit_code,
+            });
+        }
+
+        // If $1 is '(' and $4 is ')', evaluate $2 $3 as 2-argument test
+        if args[0] == "(" && args[3] == ")" {
+            return evaluate_test_args(state, &[args[1].clone(), args[2].clone()], fs, &variable_test);
+        }
+    }
+
+    // For more complex expressions, use recursive evaluation
+    // This is a simplified implementation - full POSIX test requires more complex parsing
+    TestResult::failure()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

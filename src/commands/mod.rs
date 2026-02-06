@@ -17,5 +17,5 @@ pub mod wc;
 pub mod types;
 pub mod utils;
 
-pub use registry::CommandRegistry;
+pub use registry::{CommandRegistry, register_batch_a, create_batch_a_registry};
 pub use types::{Command, CommandContext, CommandResult};

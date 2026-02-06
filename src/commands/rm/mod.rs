@@ -103,7 +103,7 @@ impl Command for RmCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fs::{FileSystem, InMemoryFs, MkdirOptions};
+    use crate::fs::{FileSystem, InMemoryFs};
     use std::sync::Arc;
     use std::collections::HashMap;
 
@@ -151,7 +151,7 @@ mod tests {
     #[tokio::test]
     async fn test_rm_directory_without_r() {
         let fs = Arc::new(InMemoryFs::new());
-        fs.mkdir("/testdir", &MkdirOptions { recursive: false }).await.unwrap();
+        fs.mkdir("/testdir", &crate::fs::MkdirOptions { recursive: false }).await.unwrap();
         let ctx = CommandContext {
             args: vec!["/testdir".to_string()],
             stdin: String::new(),
@@ -168,7 +168,7 @@ mod tests {
     #[tokio::test]
     async fn test_rm_recursive() {
         let fs = Arc::new(InMemoryFs::new());
-        fs.mkdir("/testdir", &MkdirOptions { recursive: false }).await.unwrap();
+        fs.mkdir("/testdir", &crate::fs::MkdirOptions { recursive: false }).await.unwrap();
         fs.write_file("/testdir/file.txt", b"content").await.unwrap();
         let ctx = CommandContext {
             args: vec!["-r".to_string(), "/testdir".to_string()],

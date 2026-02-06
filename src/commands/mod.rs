@@ -9,6 +9,7 @@ pub mod head;
 pub mod ls;
 pub mod mkdir;
 pub mod mv;
+pub mod nl;
 pub mod registry;
 pub mod rm;
 pub mod tail;

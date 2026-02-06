@@ -1,6 +1,29 @@
 //! Pipeline Execution
 //!
 //! Handles execution of command pipelines (cmd1 | cmd2 | cmd3).
+//!
+//! # Design Decisions
+//!
+//! ## Error Handling
+//!
+//! The original plan specified handling `BadSubstitution` and `Exit` errors specially
+//! within the pipeline execution logic. However, this implementation propagates all
+//! errors directly to the caller. This design delegates error handling responsibility
+//! to the runtime/interpreter layer, which has better context for handling these
+//! errors appropriately (e.g., deciding whether to exit the shell or continue).
+//!
+//! ## State Management
+//!
+//! The original plan specified saving and restoring `lastArg` (`$_`) and environment
+//! variables within the pipeline execution. This implementation does not perform
+//! this state management internally. Instead, it is the caller's responsibility to:
+//! - Save `$_` before pipeline execution if needed
+//! - Restore `$_` after pipeline execution
+//! - Manage environment variable isolation for subshell contexts
+//!
+//! This separation of concerns keeps the pipeline execution logic focused on
+//! orchestrating command execution and output piping, while the interpreter
+//! handles shell state management.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -521,5 +544,201 @@ mod tests {
 
         // Single compound command - don't set PIPESTATUS
         assert!(!should_set_pipestatus(1, false));
+    }
+
+    #[test]
+    fn test_execute_pipeline_basic() {
+        use crate::ast::types::{AST, CommandNode, SimpleCommandNode, WordNode, WordPart, LiteralPart};
+
+        let mut state = PipelineState::new();
+
+        // Create two simple command nodes for a pipeline: cmd1 | cmd2
+        let cmd1 = CommandNode::Simple(SimpleCommandNode {
+            name: Some(WordNode {
+                parts: vec![WordPart::Literal(LiteralPart { value: "echo".to_string() })],
+            }),
+            args: vec![WordNode {
+                parts: vec![WordPart::Literal(LiteralPart { value: "hello".to_string() })],
+            }],
+            assignments: vec![],
+            redirections: vec![],
+            line: None,
+        });
+
+        let cmd2 = CommandNode::Simple(SimpleCommandNode {
+            name: Some(WordNode {
+                parts: vec![WordPart::Literal(LiteralPart { value: "cat".to_string() })],
+            }),
+            args: vec![],
+            assignments: vec![],
+            redirections: vec![],
+            line: None,
+        });
+
+        let commands = vec![cmd1, cmd2];
+        let pipe_stderr = vec![false, false];
+        let options = PipelineOptions::default();
+
+        // Mock callback that simulates command execution
+        // First command outputs "hello\n", second command passes through stdin
+        let mut call_count = 0;
+        let execute_command = |_cmd: &CommandNode, stdin: &str| -> Result<ExecResult, InterpreterError> {
+            call_count += 1;
+            if call_count == 1 {
+                // First command: echo "hello"
+                Ok(ExecResult {
+                    stdout: "hello\n".to_string(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                    env: None,
+                })
+            } else {
+                // Second command: cat (passes through stdin)
+                Ok(ExecResult {
+                    stdout: stdin.to_string(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                    env: None,
+                })
+            }
+        };
+
+        let result = execute_pipeline(&mut state, &commands, &pipe_stderr, &options, execute_command);
+
+        assert!(result.is_ok());
+        let pipeline_result = result.unwrap();
+
+        // Verify the pipeline executed correctly
+        assert_eq!(pipeline_result.exit_codes, vec![0, 0]);
+        assert_eq!(pipeline_result.final_exit_code, 0);
+        assert_eq!(pipeline_result.stdout, "hello\n");
+        assert_eq!(pipeline_result.stderr, "");
+    }
+
+    #[test]
+    fn test_execute_pipeline_with_pipefail() {
+        use crate::ast::types::{CommandNode, SimpleCommandNode, WordNode, WordPart, LiteralPart};
+
+        let mut state = PipelineState::new();
+
+        // Create three command nodes for a pipeline where the middle one fails
+        let cmd1 = CommandNode::Simple(SimpleCommandNode {
+            name: Some(WordNode {
+                parts: vec![WordPart::Literal(LiteralPart { value: "cmd1".to_string() })],
+            }),
+            args: vec![],
+            assignments: vec![],
+            redirections: vec![],
+            line: None,
+        });
+
+        let cmd2 = CommandNode::Simple(SimpleCommandNode {
+            name: Some(WordNode {
+                parts: vec![WordPart::Literal(LiteralPart { value: "cmd2".to_string() })],
+            }),
+            args: vec![],
+            assignments: vec![],
+            redirections: vec![],
+            line: None,
+        });
+
+        let cmd3 = CommandNode::Simple(SimpleCommandNode {
+            name: Some(WordNode {
+                parts: vec![WordPart::Literal(LiteralPart { value: "cmd3".to_string() })],
+            }),
+            args: vec![],
+            assignments: vec![],
+            redirections: vec![],
+            line: None,
+        });
+
+        let commands = vec![cmd1, cmd2, cmd3];
+        let pipe_stderr = vec![false, false, false];
+        let mut options = PipelineOptions::default();
+        options.pipefail = true;
+
+        // Mock callback: cmd1 succeeds, cmd2 fails with exit code 5, cmd3 succeeds
+        let mut call_count = 0;
+        let execute_command = |_cmd: &CommandNode, _stdin: &str| -> Result<ExecResult, InterpreterError> {
+            call_count += 1;
+            let exit_code = if call_count == 2 { 5 } else { 0 };
+            Ok(ExecResult {
+                stdout: format!("output{}\n", call_count),
+                stderr: String::new(),
+                exit_code,
+                env: None,
+            })
+        };
+
+        let result = execute_pipeline(&mut state, &commands, &pipe_stderr, &options, execute_command);
+
+        assert!(result.is_ok());
+        let pipeline_result = result.unwrap();
+
+        // With pipefail, the exit code should be the rightmost non-zero (5)
+        assert_eq!(pipeline_result.exit_codes, vec![0, 5, 0]);
+        assert_eq!(pipeline_result.final_exit_code, 5);
+    }
+
+    #[test]
+    fn test_execute_pipeline_pipe_stderr() {
+        use crate::ast::types::{CommandNode, SimpleCommandNode, WordNode, WordPart, LiteralPart};
+
+        let mut state = PipelineState::new();
+
+        // Create two command nodes for a pipeline with |& (pipe stderr)
+        let cmd1 = CommandNode::Simple(SimpleCommandNode {
+            name: Some(WordNode {
+                parts: vec![WordPart::Literal(LiteralPart { value: "cmd1".to_string() })],
+            }),
+            args: vec![],
+            assignments: vec![],
+            redirections: vec![],
+            line: None,
+        });
+
+        let cmd2 = CommandNode::Simple(SimpleCommandNode {
+            name: Some(WordNode {
+                parts: vec![WordPart::Literal(LiteralPart { value: "cmd2".to_string() })],
+            }),
+            args: vec![],
+            assignments: vec![],
+            redirections: vec![],
+            line: None,
+        });
+
+        let commands = vec![cmd1, cmd2];
+        let pipe_stderr = vec![true, false]; // First pipe is |&
+        let options = PipelineOptions::default();
+
+        // Mock callback: cmd1 outputs to both stdout and stderr
+        let mut call_count = 0;
+        let execute_command = |_cmd: &CommandNode, stdin: &str| -> Result<ExecResult, InterpreterError> {
+            call_count += 1;
+            if call_count == 1 {
+                Ok(ExecResult {
+                    stdout: "stdout1\n".to_string(),
+                    stderr: "stderr1\n".to_string(),
+                    exit_code: 0,
+                    env: None,
+                })
+            } else {
+                // Second command receives both stdout and stderr as stdin
+                Ok(ExecResult {
+                    stdout: format!("received: {}", stdin),
+                    stderr: String::new(),
+                    exit_code: 0,
+                    env: None,
+                })
+            }
+        };
+
+        let result = execute_pipeline(&mut state, &commands, &pipe_stderr, &options, execute_command);
+
+        assert!(result.is_ok());
+        let pipeline_result = result.unwrap();
+
+        // With |&, both stderr and stdout from cmd1 should be piped to cmd2
+        assert_eq!(pipeline_result.stdout, "received: stderr1\nstdout1\n");
     }
 }

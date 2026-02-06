@@ -14,6 +14,7 @@ pub mod nl;
 pub mod paste;
 pub mod registry;
 pub mod rm;
+pub mod sort;
 pub mod tail;
 pub mod test_cmd;
 pub mod touch;

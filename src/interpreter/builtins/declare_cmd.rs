@@ -15,6 +15,7 @@
 use std::collections::HashSet;
 use regex_lite::Regex;
 
+use crate::interpreter::arithmetic::evaluate_array_index;
 use crate::interpreter::builtins::{
     parse_array_elements, parse_assoc_array_literal, list_all_variables, list_associative_arrays,
     list_indexed_arrays, print_all_variables, print_specific_variables, PrintAllFilters, BuiltinResult,
@@ -456,7 +457,7 @@ pub fn handle_declare(state: &mut InterpreterState, args: &[String]) -> BuiltinR
                                 let index_expr = caps.get(1).unwrap().as_str();
                                 let raw_value = caps.get(2).unwrap().as_str();
                                 let value = expand_tildes_in_value(&state.env, raw_value);
-                                let index: i64 = index_expr.parse().unwrap_or(0);
+                                let index: i64 = evaluate_array_index(state, index_expr);
                                 state.env.insert(format!("{}_{}", name, index), value);
                                 current_index = index + 1;
                             } else {

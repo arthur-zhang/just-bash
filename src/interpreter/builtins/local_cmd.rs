@@ -8,6 +8,7 @@
 //! - local VAR=(a b c) - declare array with values
 
 use regex_lite::Regex;
+use crate::interpreter::arithmetic::evaluate_array_index;
 use crate::interpreter::types::{ExecResult, InterpreterState};
 use crate::interpreter::helpers::result::{result, failure};
 use crate::interpreter::helpers::nameref::mark_nameref;
@@ -204,8 +205,8 @@ pub fn handle_local(
             // Save previous value for scope restoration
             save_to_scope(state, current_scope_idx, &name);
 
-            // Evaluate the index
-            let index: i64 = index_expr.parse().unwrap_or(0);
+            // Evaluate the index (can be arithmetic expression)
+            let index: i64 = evaluate_array_index(state, index_expr);
 
             // Set the array element
             state.env.insert(format!("{}_{}", name, index), index_value.to_string());

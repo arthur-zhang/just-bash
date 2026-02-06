@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 use crate::ast::types::{RedirectionNode, RedirectionTarget, RedirectionOperator, WordNode};
 use crate::interpreter::types::{ExecResult, InterpreterState};
+use crate::interpreter::interpreter::FileSystem;
 
 /// Pre-expanded redirect targets, keyed by index into the redirections array.
 /// This allows us to expand redirect targets (including side effects) before
@@ -27,16 +28,24 @@ pub struct RedirectCheckResult {
 /// Returns an error message string if invalid, None if valid.
 pub fn check_output_redirect_target(
     state: &InterpreterState,
-    _file_path: &str,
+    fs: &dyn FileSystem,
+    file_path: &str,
     target: &str,
     check_noclobber: bool,
     is_clobber: bool,
 ) -> Option<String> {
-    // In a real implementation, this would check the filesystem
-    // For now, we just check noclobber option
-    if check_noclobber && state.options.noclobber && !is_clobber && target != "/dev/null" {
-        // Would need to check if file exists
-        return None; // Assume file doesn't exist for now
+    match fs.stat(file_path) {
+        Ok(stat) => {
+            if stat.is_dir {
+                return Some(format!("bash: {}: Is a directory\n", target));
+            }
+            if check_noclobber && state.options.noclobber && !is_clobber && target != "/dev/null" {
+                return Some(format!("bash: {}: cannot overwrite existing file\n", target));
+            }
+        }
+        Err(_) => {
+            // File doesn't exist, that's ok - we'll create it
+        }
     }
     None
 }
@@ -133,6 +142,7 @@ pub fn pre_expand_redirect_targets(
 pub fn process_fd_variable_redirections(
     state: &mut InterpreterState,
     redirections: &[RedirectionNode],
+    fs: &dyn FileSystem,
     expand_word_fn: impl Fn(&mut InterpreterState, &WordNode) -> String,
 ) -> Option<ExecResult> {
     for redir in redirections {
@@ -200,7 +210,16 @@ pub fn process_fd_variable_redirections(
                 RedirectionOperator::AndDGreat
             ) {
                 // Mark this FD as pointing to a file
-                let file_marker = format!("__file__:{}", target);
+                let file_path = fs.resolve_path(&state.cwd, &target);
+                // For truncating operators (>, >|, &>), create/truncate the file now
+                if matches!(redir.operator,
+                    RedirectionOperator::Great |
+                    RedirectionOperator::Clobber |
+                    RedirectionOperator::AndGreat
+                ) {
+                    let _ = fs.write_file(&file_path, "");
+                }
+                let file_marker = format!("__file__:{}", file_path);
                 if let Some(ref mut fds) = state.file_descriptors {
                     fds.insert(fd, file_marker);
                 }
@@ -210,16 +229,123 @@ pub fn process_fd_variable_redirections(
                     fds.insert(fd, format!("{}\n", target));
                 }
             } else if matches!(redir.operator, RedirectionOperator::Less | RedirectionOperator::LessGreat) {
-                // For input redirections, would read the file content
-                // For now, just mark it
-                if let Some(ref mut fds) = state.file_descriptors {
-                    fds.insert(fd, format!("__input__:{}", target));
+                // For input redirections, read the file content
+                let file_path = fs.resolve_path(&state.cwd, &target);
+                match fs.read_file(&file_path) {
+                    Ok(content) => {
+                        if let Some(ref mut fds) = state.file_descriptors {
+                            fds.insert(fd, content);
+                        }
+                    }
+                    Err(_) => {
+                        return Some(ExecResult::new(
+                            String::new(),
+                            format!("bash: {}: No such file or directory\n", target),
+                            1,
+                        ));
+                    }
                 }
             }
         }
     }
 
     None // Success
+}
+
+/// Pre-open (truncate) output redirect files before command execution.
+/// This is needed for compound commands (subshell, for, case, [[) where
+/// bash opens/truncates the redirect file BEFORE evaluating any words in
+/// the command body (including command substitutions).
+///
+/// Example: `(echo $(cat FILE)) > FILE`
+/// - Bash first truncates FILE (making it empty)
+/// - Then executes the subshell, where `cat FILE` returns empty string
+///
+/// Returns an error result if there's an issue (like directory or noclobber),
+/// or None if pre-opening succeeded.
+pub fn pre_open_output_redirects(
+    state: &mut InterpreterState,
+    redirections: &[RedirectionNode],
+    fs: &dyn FileSystem,
+    expand_word_fn: impl Fn(&mut InterpreterState, &WordNode) -> String,
+) -> Option<ExecResult> {
+    for redir in redirections {
+        if matches!(redir.target, RedirectionTarget::HereDoc(_)) {
+            continue;
+        }
+
+        // Only handle output truncation redirects (>, >|, &>)
+        // Append (>>, &>>) doesn't need pre-truncation
+        // >& needs special handling - it's a file redirect only if word is not a number
+        let is_greater_ampersand = redir.operator == RedirectionOperator::GreatAnd;
+        if !matches!(redir.operator,
+            RedirectionOperator::Great |
+            RedirectionOperator::Clobber |
+            RedirectionOperator::AndGreat
+        ) && !is_greater_ampersand {
+            continue;
+        }
+
+        let target = if let RedirectionTarget::Word(ref word) = redir.target {
+            expand_word_fn(state, word)
+        } else {
+            continue;
+        };
+
+        // For >&, check if it's an FD redirect (number or -)
+        if is_greater_ampersand {
+            if target == "-" || target.parse::<i32>().is_ok() || redir.fd.is_some() {
+                continue;
+            }
+        }
+
+        let file_path = fs.resolve_path(&state.cwd, &target);
+        let is_clobber = redir.operator == RedirectionOperator::Clobber;
+
+        // Check if target is a directory or noclobber prevents overwrite
+        match fs.stat(&file_path) {
+            Ok(stat) => {
+                if stat.is_dir {
+                    return Some(ExecResult::new(
+                        String::new(),
+                        format!("bash: {}: Is a directory\n", target),
+                        1,
+                    ));
+                }
+                if state.options.noclobber && !is_clobber && target != "/dev/null" {
+                    return Some(ExecResult::new(
+                        String::new(),
+                        format!("bash: {}: cannot overwrite existing file\n", target),
+                        1,
+                    ));
+                }
+            }
+            Err(_) => {
+                // File doesn't exist, that's ok - we'll create it
+            }
+        }
+
+        // Pre-truncate the file (create empty file)
+        // Skip special device files that don't need pre-truncation
+        if target != "/dev/null"
+            && target != "/dev/stdout"
+            && target != "/dev/stderr"
+            && target != "/dev/full"
+        {
+            let _ = fs.write_file(&file_path, "");
+        }
+
+        // /dev/full always returns ENOSPC when written to
+        if target == "/dev/full" {
+            return Some(ExecResult::new(
+                String::new(),
+                "bash: /dev/full: No space left on device\n".to_string(),
+                1,
+            ));
+        }
+    }
+
+    None // Success - no error
 }
 
 /// Apply redirections to an execution result.
@@ -229,6 +355,7 @@ pub fn apply_redirections(
     result: ExecResult,
     redirections: &[RedirectionNode],
     pre_expanded_targets: Option<&ExpandedRedirectTargets>,
+    fs: &dyn FileSystem,
     expand_word_fn: impl Fn(&mut InterpreterState, &WordNode) -> String,
 ) -> ExecResult {
     let mut stdout = result.stdout;
@@ -262,7 +389,7 @@ pub fn apply_redirections(
         match redir.operator {
             RedirectionOperator::Great | RedirectionOperator::Clobber => {
                 let fd = redir.fd.unwrap_or(1);
-                let _is_clobber = redir.operator == RedirectionOperator::Clobber;
+                let is_clobber = redir.operator == RedirectionOperator::Clobber;
 
                 if fd == 1 {
                     // Handle special devices
@@ -278,9 +405,15 @@ pub fn apply_redirections(
                     } else if target == "/dev/null" {
                         stdout.clear();
                     } else {
-                        // Would write to file here
-                        // For now, just clear stdout (simulating write)
-                        stdout.clear();
+                        let file_path = fs.resolve_path(&state.cwd, &target);
+                        if let Some(err) = check_output_redirect_target(state, fs, &file_path, &target, true, is_clobber) {
+                            stderr.push_str(&err);
+                            exit_code = 1;
+                            stdout.clear();
+                        } else {
+                            let _ = fs.write_file(&file_path, &stdout);
+                            stdout.clear();
+                        }
                     }
                 } else if fd == 2 {
                     if target == "/dev/stderr" {
@@ -294,8 +427,14 @@ pub fn apply_redirections(
                     } else if target == "/dev/null" {
                         stderr.clear();
                     } else {
-                        // Would write to file here
-                        stderr.clear();
+                        let file_path = fs.resolve_path(&state.cwd, &target);
+                        if let Some(err) = check_output_redirect_target(state, fs, &file_path, &target, true, is_clobber) {
+                            stderr.push_str(&err);
+                            exit_code = 1;
+                        } else {
+                            let _ = fs.write_file(&file_path, &stderr);
+                            stderr.clear();
+                        }
                     }
                 }
             }
@@ -314,8 +453,15 @@ pub fn apply_redirections(
                         exit_code = 1;
                         stdout.clear();
                     } else {
-                        // Would append to file here
-                        stdout.clear();
+                        let file_path = fs.resolve_path(&state.cwd, &target);
+                        if let Some(err) = check_output_redirect_target(state, fs, &file_path, &target, false, false) {
+                            stderr.push_str(&err);
+                            exit_code = 1;
+                            stdout.clear();
+                        } else {
+                            let _ = fs.append_file(&file_path, &stdout);
+                            stdout.clear();
+                        }
                     }
                 } else if fd == 2 {
                     if target == "/dev/stderr" {
@@ -327,8 +473,14 @@ pub fn apply_redirections(
                         stderr.push_str("bash: echo: write error: No space left on device\n");
                         exit_code = 1;
                     } else {
-                        // Would append to file here
-                        stderr.clear();
+                        let file_path = fs.resolve_path(&state.cwd, &target);
+                        if let Some(err) = check_output_redirect_target(state, fs, &file_path, &target, false, false) {
+                            stderr.push_str(&err);
+                            exit_code = 1;
+                        } else {
+                            let _ = fs.append_file(&file_path, &stderr);
+                            stderr.clear();
+                        }
                     }
                 }
             }
@@ -344,8 +496,26 @@ pub fn apply_redirections(
                 // Handle FD move operation: N>&M-
                 if target.ends_with('-') {
                     let source_fd_str = &target[..target.len() - 1];
-                    if source_fd_str.parse::<i32>().is_ok() {
-                        // Would handle FD move here
+                    if let Ok(source_fd) = source_fd_str.parse::<i32>() {
+                        // Duplicate: copy content from source to target FD
+                        if source_fd == 1 && fd == 2 {
+                            stderr.push_str(&stdout);
+                        } else if source_fd == 2 && fd == 1 {
+                            stdout.push_str(&stderr);
+                        }
+                        // Close the source FD
+                        if source_fd == 1 {
+                            stdout.clear();
+                        } else if source_fd == 2 {
+                            stderr.clear();
+                        }
+                        // Mark the move in persistent FDs
+                        if let Some(ref mut fds) = state.file_descriptors {
+                            if let Some(content) = fds.get(&source_fd).cloned() {
+                                fds.insert(fd, content);
+                            }
+                            fds.remove(&source_fd);
+                        }
                         continue;
                     }
                 }
@@ -369,10 +539,12 @@ pub fn apply_redirections(
                     if let Some(ref fds) = state.file_descriptors {
                         if let Some(fd_info) = fds.get(&target_fd) {
                             if fd_info.starts_with("__file__:") {
-                                // Would write to file here
+                                let file_path = &fd_info[9..];
                                 if fd == 1 {
+                                    let _ = fs.append_file(file_path, &stdout);
                                     stdout.clear();
                                 } else if fd == 2 {
+                                    let _ = fs.append_file(file_path, &stderr);
                                     stderr.clear();
                                 }
                             }
@@ -392,7 +564,9 @@ pub fn apply_redirections(
                     exit_code = 1;
                     stdout.clear();
                 } else {
-                    // Would write both stdout and stderr to file
+                    let file_path = fs.resolve_path(&state.cwd, &target);
+                    let combined = format!("{}{}", stdout, stderr);
+                    let _ = fs.write_file(&file_path, &combined);
                     stdout.clear();
                     stderr.clear();
                 }
@@ -404,7 +578,9 @@ pub fn apply_redirections(
                     exit_code = 1;
                     stdout.clear();
                 } else {
-                    // Would append both stdout and stderr to file
+                    let file_path = fs.resolve_path(&state.cwd, &target);
+                    let combined = format!("{}{}", stdout, stderr);
+                    let _ = fs.append_file(&file_path, &combined);
                     stdout.clear();
                     stderr.clear();
                 }
@@ -421,7 +597,8 @@ pub fn apply_redirections(
                 stderr.push_str(&stdout);
                 stdout.clear();
             } else if fd1_info.starts_with("__file__:") {
-                // Would write to file
+                let file_path = &fd1_info[9..];
+                let _ = fs.append_file(file_path, &stdout);
                 stdout.clear();
             }
         }
@@ -431,7 +608,8 @@ pub fn apply_redirections(
                 stdout.push_str(&stderr);
                 stderr.clear();
             } else if fd2_info.starts_with("__file__:") {
-                // Would write to file
+                let file_path = &fd2_info[9..];
+                let _ = fs.append_file(file_path, &stderr);
                 stderr.clear();
             }
         }

@@ -1,6 +1,7 @@
 // src/commands/mod.rs
 pub mod basename;
 pub mod cat;
+pub mod cut;
 pub mod cp;
 pub mod dirname;
 pub mod grep;

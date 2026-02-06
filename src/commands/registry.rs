@@ -59,6 +59,7 @@ use super::tr::TrCommand;
 use super::paste::PasteCommand;
 use super::join::JoinCommand;
 use super::sort::SortCommand;
+use super::sed::SedCommand;
 
 /// 注册批次 A 的所有命令
 pub fn register_batch_a(registry: &mut CommandRegistry) {
@@ -95,6 +96,7 @@ pub fn register_batch_b(registry: &mut CommandRegistry) {
     registry.register(Box::new(PasteCommand));
     registry.register(Box::new(JoinCommand));
     registry.register(Box::new(SortCommand));
+    registry.register(Box::new(SedCommand));
 }
 
 /// 创建包含批次 A 和 B 命令的注册表

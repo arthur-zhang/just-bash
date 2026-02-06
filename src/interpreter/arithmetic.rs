@@ -998,6 +998,30 @@ fn eval_concat_part_to_string(
     }
 }
 
+/// Evaluate a simple arithmetic expression for array index.
+/// This is a simplified version that only needs InterpreterState.
+/// Used by declare/local builtins for array index evaluation.
+pub fn evaluate_array_index(state: &mut InterpreterState, expr: &str) -> i64 {
+    use crate::interpreter::types::ExecutionLimits;
+
+    // First try simple integer parse
+    if let Ok(n) = expr.trim().parse::<i64>() {
+        return n;
+    }
+
+    // Try to evaluate as arithmetic expression
+    let (arith_expr, _) = parse_arith_expr(expr, 0);
+    let limits = ExecutionLimits::default();
+    let mut ctx = InterpreterContext::new(state, &limits);
+
+    match evaluate_arithmetic(&mut ctx, &arith_expr, false, None) {
+        Ok(n) => n,
+        Err(_) => 0,
+    }
+}
+
+use crate::interpreter::types::InterpreterState;
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -1164,5 +1188,41 @@ mod tests {
         let result = evaluate_arithmetic(&mut ctx, &expr, false, None);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 0);
+    }
+
+    #[test]
+    fn test_evaluate_array_index_simple() {
+        use crate::interpreter::types::InterpreterState;
+
+        let mut state = InterpreterState::default();
+
+        // Simple integer
+        assert_eq!(evaluate_array_index(&mut state, "5"), 5);
+        assert_eq!(evaluate_array_index(&mut state, "0"), 0);
+        assert_eq!(evaluate_array_index(&mut state, "-1"), -1);
+    }
+
+    #[test]
+    fn test_evaluate_array_index_arithmetic() {
+        use crate::interpreter::types::InterpreterState;
+
+        let mut state = InterpreterState::default();
+
+        // Arithmetic expressions
+        assert_eq!(evaluate_array_index(&mut state, "1+2"), 3);
+        assert_eq!(evaluate_array_index(&mut state, "10-3"), 7);
+        assert_eq!(evaluate_array_index(&mut state, "2*3"), 6);
+    }
+
+    #[test]
+    fn test_evaluate_array_index_with_variable() {
+        use crate::interpreter::types::InterpreterState;
+
+        let mut state = InterpreterState::default();
+        state.env.insert("i".to_string(), "5".to_string());
+
+        // Variable reference
+        assert_eq!(evaluate_array_index(&mut state, "i"), 5);
+        assert_eq!(evaluate_array_index(&mut state, "i+1"), 6);
     }
 }

@@ -14,6 +14,7 @@ pub mod tail;
 pub mod test_cmd;
 pub mod touch;
 pub mod wc;
+pub mod uniq;
 pub mod types;
 pub mod utils;
 

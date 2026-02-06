@@ -51,6 +51,15 @@ use super::ls::LsCommand;
 use super::grep::GrepCommand;
 use super::test_cmd::{TestCommand, BracketCommand};
 
+// Batch B imports
+use super::uniq::UniqCommand;
+use super::cut::CutCommand;
+use super::nl::NlCommand;
+use super::tr::TrCommand;
+use super::paste::PasteCommand;
+use super::join::JoinCommand;
+use super::sort::SortCommand;
+
 /// 注册批次 A 的所有命令
 pub fn register_batch_a(registry: &mut CommandRegistry) {
     registry.register(Box::new(BasenameCommand));
@@ -74,5 +83,24 @@ pub fn register_batch_a(registry: &mut CommandRegistry) {
 pub fn create_batch_a_registry() -> CommandRegistry {
     let mut registry = CommandRegistry::new();
     register_batch_a(&mut registry);
+    registry
+}
+
+/// 注册批次 B 的所有命令
+pub fn register_batch_b(registry: &mut CommandRegistry) {
+    registry.register(Box::new(UniqCommand));
+    registry.register(Box::new(CutCommand));
+    registry.register(Box::new(NlCommand));
+    registry.register(Box::new(TrCommand));
+    registry.register(Box::new(PasteCommand));
+    registry.register(Box::new(JoinCommand));
+    registry.register(Box::new(SortCommand));
+}
+
+/// 创建包含批次 A 和 B 命令的注册表
+pub fn create_batch_ab_registry() -> CommandRegistry {
+    let mut registry = CommandRegistry::new();
+    register_batch_a(&mut registry);
+    register_batch_b(&mut registry);
     registry
 }

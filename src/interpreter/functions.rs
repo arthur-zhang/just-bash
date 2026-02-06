@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use crate::FunctionDefNode;
-use crate::interpreter::errors::{ExitError, ReturnError};
+use crate::interpreter::errors::{ExitError, InterpreterError, ExecutionLimitError, LimitType, ReturnError};
 use crate::interpreter::types::{ExecResult, InterpreterState};
 use crate::interpreter::helpers::shell_constants::POSIX_SPECIAL_BUILTINS;
 
@@ -80,9 +80,22 @@ pub fn setup_function_call(
     func: &FunctionDefNode,
     args: &[String],
     call_line: Option<u32>,
-) -> Result<FunctionCallContext, ExitError> {
+    max_call_depth: u32,
+) -> Result<FunctionCallContext, InterpreterError> {
     // Increment call depth
     state.call_depth += 1;
+
+    // Check recursion depth limit
+    if state.call_depth > max_call_depth {
+        state.call_depth -= 1;
+        return Err(InterpreterError::ExecutionLimit(ExecutionLimitError::simple(
+            format!(
+                "{}: maximum recursion depth ({}) exceeded",
+                func.name, max_call_depth
+            ),
+            LimitType::Recursion,
+        )));
+    }
 
     // Initialize stacks if not present
     if state.func_name_stack.is_none() {
@@ -231,6 +244,46 @@ pub fn handle_return_error(error: ReturnError) -> ExecResult {
     }
 }
 
+/// Execute a function call with full setup, execution, and cleanup.
+/// This is the main entry point for function invocation.
+///
+/// The `execute_body` callback is used to execute the function body,
+/// allowing the caller to provide the actual command execution logic.
+pub fn call_function<F>(
+    state: &mut InterpreterState,
+    func: &FunctionDefNode,
+    args: &[String],
+    stdin: &str,
+    call_line: Option<u32>,
+    max_call_depth: u32,
+    execute_body: F,
+) -> Result<ExecResult, InterpreterError>
+where
+    F: FnOnce(&mut InterpreterState, &str) -> Result<ExecResult, InterpreterError>,
+{
+    let ctx = setup_function_call(state, func, args, call_line, max_call_depth)?;
+
+    let result = match execute_body(state, stdin) {
+        Ok(res) => res,
+        Err(InterpreterError::Return(ret_err)) => {
+            // Convert ReturnError to normal result
+            ExecResult {
+                stdout: ret_err.stdout,
+                stderr: ret_err.stderr,
+                exit_code: ret_err.exit_code,
+                env: None,
+            }
+        }
+        Err(e) => {
+            cleanup_function_call(state, ctx);
+            return Err(e);
+        }
+    };
+
+    cleanup_function_call(state, ctx);
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,7 +372,7 @@ mod tests {
         let args = vec!["arg1".to_string(), "arg2".to_string()];
 
         // Setup
-        let ctx = setup_function_call(&mut state, &func, &args, Some(10)).unwrap();
+        let ctx = setup_function_call(&mut state, &func, &args, Some(10), 1000).unwrap();
 
         // Check positional parameters are set
         assert_eq!(state.env.get("1"), Some(&"arg1".to_string()));
@@ -334,5 +387,166 @@ mod tests {
         assert!(state.env.get("1").is_none());
         assert!(state.env.get("2").is_none());
         assert_eq!(state.call_depth, 0);
+    }
+
+    #[test]
+    fn test_recursion_depth_limit() {
+        let mut state = make_state();
+        let func = make_function("recursive");
+
+        // Simulate deep recursion up to the limit
+        for _ in 0..100 {
+            let ctx = setup_function_call(&mut state, &func, &[], None, 1000).unwrap();
+            // Don't cleanup - simulate nested calls
+            std::mem::forget(ctx);
+        }
+
+        // Should fail at depth 101 when limit is 100
+        let result = setup_function_call(&mut state, &func, &[], None, 100);
+        assert!(result.is_err());
+
+        // Verify it's an ExecutionLimit error
+        if let Err(InterpreterError::ExecutionLimit(e)) = result {
+            assert!(e.message.contains("maximum recursion depth"));
+            assert!(e.message.contains("recursive"));
+        } else {
+            panic!("Expected ExecutionLimit error");
+        }
+    }
+
+    #[test]
+    fn test_recursion_depth_limit_exact_boundary() {
+        let mut state = make_state();
+        let func = make_function("test_func");
+
+        // Should succeed at exactly the limit
+        let ctx = setup_function_call(&mut state, &func, &[], None, 1).unwrap();
+        assert_eq!(state.call_depth, 1);
+        cleanup_function_call(&mut state, ctx);
+
+        // Setup again to depth 1
+        let _ctx = setup_function_call(&mut state, &func, &[], None, 1).unwrap();
+
+        // Should fail at depth 2 when limit is 1
+        let result = setup_function_call(&mut state, &func, &[], None, 1);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_call_function_success() {
+        let mut state = make_state();
+        let func = make_function("myfunc");
+        let args = vec!["arg1".to_string()];
+
+        let result = call_function(
+            &mut state,
+            &func,
+            &args,
+            "",
+            None,
+            1000,
+            |_state, _stdin| {
+                Ok(ExecResult {
+                    stdout: "hello\n".to_string(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                    env: None,
+                })
+            },
+        );
+
+        assert!(result.is_ok());
+        let res = result.unwrap();
+        assert_eq!(res.stdout, "hello\n");
+        assert_eq!(res.exit_code, 0);
+        // State should be cleaned up
+        assert_eq!(state.call_depth, 0);
+    }
+
+    #[test]
+    fn test_call_function_handles_return() {
+        use crate::interpreter::errors::ReturnError;
+
+        let mut state = make_state();
+        let func = make_function("myfunc");
+
+        let result = call_function(
+            &mut state,
+            &func,
+            &[],
+            "",
+            None,
+            1000,
+            |_state, _stdin| {
+                Err(InterpreterError::Return(ReturnError::new(
+                    42,
+                    "output\n".to_string(),
+                    String::new(),
+                )))
+            },
+        );
+
+        // Return should be converted to normal result
+        assert!(result.is_ok());
+        let res = result.unwrap();
+        assert_eq!(res.exit_code, 42);
+        assert_eq!(res.stdout, "output\n");
+        // State should be cleaned up
+        assert_eq!(state.call_depth, 0);
+    }
+
+    #[test]
+    fn test_call_function_propagates_other_errors() {
+        use crate::interpreter::errors::ExitError;
+
+        let mut state = make_state();
+        let func = make_function("myfunc");
+
+        let result = call_function(
+            &mut state,
+            &func,
+            &[],
+            "",
+            None,
+            1000,
+            |_state, _stdin| {
+                Err(InterpreterError::Exit(ExitError::new(
+                    1,
+                    String::new(),
+                    "error\n".to_string(),
+                )))
+            },
+        );
+
+        // Other errors should be propagated
+        assert!(result.is_err());
+        assert!(matches!(result, Err(InterpreterError::Exit(_))));
+        // State should still be cleaned up
+        assert_eq!(state.call_depth, 0);
+    }
+
+    #[test]
+    fn test_call_function_recursion_limit() {
+        let mut state = make_state();
+        let func = make_function("recursive");
+
+        // Set call_depth to simulate being at the limit
+        state.call_depth = 100;
+
+        let result = call_function(
+            &mut state,
+            &func,
+            &[],
+            "",
+            None,
+            100, // limit is 100, we're already at 100
+            |_state, _stdin| {
+                Ok(ExecResult::ok())
+            },
+        );
+
+        // Should fail due to recursion limit
+        assert!(result.is_err());
+        assert!(matches!(result, Err(InterpreterError::ExecutionLimit(_))));
     }
 }

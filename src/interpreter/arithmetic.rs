@@ -417,7 +417,8 @@ pub fn evaluate_arithmetic(
 
         ArithExpr::SpecialVar(node) => {
             // Get the special variable value and parse as arithmetic
-            let value = get_arith_variable(ctx, &node.name);
+            // Use get_variable to properly resolve special vars like $?, $$, $!, $#
+            let value = get_variable(ctx, &node.name);
             let trimmed = value.trim();
             if trimmed.is_empty() {
                 return Ok(0);
@@ -510,7 +511,9 @@ pub fn evaluate_arithmetic(
                     if let ArithExpr::Variable(ref var_node) = **index {
                         if var_node.has_dollar_prefix {
                             let expanded_key = get_arith_variable(ctx, &var_node.name);
-                            let env_key = format!("{}_{}", node.array, expanded_key);
+                            // OSH quirk: when variable expands to empty, use backslash as key
+                            let key = if expanded_key.is_empty() { "\\".to_string() } else { expanded_key };
+                            let env_key = format!("{}_{}", node.array, key);
                             let array_value = ctx.state.env.get(&env_key).cloned().unwrap_or_default();
                             return evaluate_arith_value(ctx, &array_value, is_expansion_context, exec_fn);
                         }
@@ -862,7 +865,8 @@ fn handle_inc_dec(
                             format!("{}_{}", arr_node.array, var_node.name)
                         } else {
                             let expanded_key = get_arith_variable(ctx, &var_node.name);
-                            format!("{}_{}", arr_node.array, expanded_key)
+                            let key = if expanded_key.is_empty() { "\\".to_string() } else { expanded_key };
+                            format!("{}_{}", arr_node.array, key)
                         }
                     } else {
                         let idx = evaluate_arithmetic(ctx, index, is_expansion_context, exec_fn)?;
@@ -947,7 +951,7 @@ fn eval_concat_part_to_string(
         ArithExpr::Number(num_node) => Ok(num_node.value.to_string()),
 
         ArithExpr::SpecialVar(var_node) => {
-            Ok(get_arith_variable(ctx, &var_node.name))
+            Ok(get_variable(ctx, &var_node.name))
         }
 
         ArithExpr::SingleQuote(_node) => {

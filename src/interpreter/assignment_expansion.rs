@@ -16,11 +16,11 @@ pub fn expand_local_array_assignment(
 ) -> Option<String> {
     // First, join all parts to check if this looks like an array assignment
     let full_literal: String = word.parts.iter()
-        .filter_map(|p| {
+        .map(|p| {
             if let WordPart::Literal(LiteralPart { value }) = p {
-                Some(value.clone())
+                value.clone()
             } else {
-                None
+                "\x00".to_string()
             }
         })
         .collect();
@@ -37,6 +37,9 @@ pub fn expand_local_array_assignment(
     let mut elements: Vec<String> = Vec::new();
     let mut in_array_content = false;
     let mut pending_literal = String::new();
+    // Track whether we've seen a quoted part (SingleQuoted, DoubleQuoted) since
+    // last element push. This ensures empty quoted strings like '' are preserved.
+    let mut has_quoted_content = false;
 
     for part in &word.parts {
         match part {
@@ -54,54 +57,76 @@ pub fn expand_local_array_assignment(
                         val = val[..val.len() - 1].to_string();
                     }
 
-                    for token in val.split_whitespace() {
-                        if !pending_literal.is_empty() {
-                            elements.push(pending_literal.clone());
-                            pending_literal.clear();
-                        }
+                    // Split by whitespace but preserve separators (like TS split(/(\s+)/))
+                    let ws_re = regex_lite::Regex::new(r"(\s+)").unwrap();
+                    let tokens: Vec<&str> = ws_re.split(&val).collect();
+                    let separators: Vec<&str> = ws_re.find_iter(&val).map(|m| m.as_str()).collect();
+
+                    for (i, token) in tokens.iter().enumerate() {
                         if !token.is_empty() {
-                            elements.push(token.to_string());
+                            pending_literal.push_str(token);
+                        }
+                        // If there's a separator after this token, push pending element
+                        if i < separators.len() {
+                            if !pending_literal.is_empty() || has_quoted_content {
+                                elements.push(pending_literal.clone());
+                                pending_literal.clear();
+                                has_quoted_content = false;
+                            }
                         }
                     }
                 }
             }
-            WordPart::SingleQuoted(SingleQuotedPart { value }) if in_array_content => {
-                pending_literal.push_str(value);
-            }
-            WordPart::DoubleQuoted(DoubleQuotedPart { parts }) if in_array_content => {
-                for inner_part in parts {
-                    if let WordPart::Literal(LiteralPart { value }) = inner_part {
+            _ if in_array_content => {
+                match part {
+                    WordPart::SingleQuoted(SingleQuotedPart { value }) => {
+                        has_quoted_content = true;
                         pending_literal.push_str(value);
-                    } else if let WordPart::ParameterExpansion(ParameterExpansionPart { parameter, .. }) = inner_part {
+                    }
+                    WordPart::DoubleQuoted(DoubleQuotedPart { parts }) => {
+                        has_quoted_content = true;
+                        for inner_part in parts {
+                            pending_literal.push_str(&expand_word_part_simple(ctx, inner_part));
+                        }
+                    }
+                    WordPart::Escaped(EscapedPart { value }) => {
+                        has_quoted_content = true;
+                        pending_literal.push_str(value);
+                    }
+                    WordPart::ParameterExpansion(ParameterExpansionPart { parameter, .. }) => {
                         if let Some(val) = ctx.state.env.get(parameter) {
                             pending_literal.push_str(val);
                         }
                     }
-                }
-            }
-            WordPart::Escaped(EscapedPart { value }) if in_array_content => {
-                pending_literal.push_str(value);
-            }
-            WordPart::ParameterExpansion(ParameterExpansionPart { parameter, .. }) if in_array_content => {
-                if let Some(val) = ctx.state.env.get(parameter) {
-                    pending_literal.push_str(val);
+                    _ => {
+                        pending_literal.push_str(&expand_word_part_simple(ctx, part));
+                    }
                 }
             }
             _ => {}
         }
     }
 
-    if !pending_literal.is_empty() {
+    // Push final element if we have content OR saw quoted part
+    if !pending_literal.is_empty() || has_quoted_content {
         elements.push(pending_literal);
     }
 
     // Build result string with proper quoting
+    let keyed_re = regex_lite::Regex::new(r"^\[.+\]=").unwrap();
     let quoted_elements: Vec<String> = elements.iter()
         .map(|elem| {
+            // Don't quote keyed elements like ['key']=value or [index]=value
+            if keyed_re.is_match(elem) {
+                return elem.clone();
+            }
             if elem.is_empty() {
                 return "''".to_string();
             }
-            if elem.chars().any(|c| " \t\n\"'\\$`!*?[]{}|&;<>()".contains(c)) {
+            if elem.chars().any(|c| " \t\n\"'\\$`!*?[]{}|&;<>()".contains(c))
+                && !elem.starts_with('\'')
+                && !elem.starts_with('"')
+            {
                 return format!("'{}'", elem.replace('\'', "'\\''"));
             }
             elem.clone()
@@ -257,5 +282,109 @@ mod tests {
 
         let result = expand_scalar_assignment_arg(&mut ctx, &word);
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_array_assignment_simple() {
+        let (mut state, limits) = make_ctx();
+        let mut ctx = InterpreterContext::new(&mut state, &limits);
+
+        let word = WordNode {
+            parts: vec![
+                WordPart::Literal(LiteralPart { value: "arr=(a b c)".to_string() }),
+            ],
+        };
+
+        let result = expand_local_array_assignment(&mut ctx, &word);
+        assert_eq!(result, Some("arr=(a b c)".to_string()));
+    }
+
+    #[test]
+    fn test_array_assignment_empty_quoted_string() {
+        let (mut state, limits) = make_ctx();
+        let mut ctx = InterpreterContext::new(&mut state, &limits);
+
+        // arr=('' "")  — empty single-quoted and double-quoted strings
+        let word = WordNode {
+            parts: vec![
+                WordPart::Literal(LiteralPart { value: "arr=(".to_string() }),
+                WordPart::SingleQuoted(SingleQuotedPart { value: "".to_string() }),
+                WordPart::Literal(LiteralPart { value: " ".to_string() }),
+                WordPart::DoubleQuoted(DoubleQuotedPart { parts: vec![] }),
+                WordPart::Literal(LiteralPart { value: ")".to_string() }),
+            ],
+        };
+
+        let result = expand_local_array_assignment(&mut ctx, &word);
+        assert_eq!(result, Some("arr=('' '')".to_string()));
+    }
+
+    #[test]
+    fn test_array_assignment_with_variable() {
+        let (mut state, limits) = make_ctx();
+        state.env.insert("x".to_string(), "hello world".to_string());
+        let mut ctx = InterpreterContext::new(&mut state, &limits);
+
+        // arr=($x)
+        let word = WordNode {
+            parts: vec![
+                WordPart::Literal(LiteralPart { value: "arr=(".to_string() }),
+                WordPart::ParameterExpansion(ParameterExpansionPart {
+                    parameter: "x".to_string(),
+                    operation: None,
+                }),
+                WordPart::Literal(LiteralPart { value: ")".to_string() }),
+            ],
+        };
+
+        let result = expand_local_array_assignment(&mut ctx, &word);
+        // The variable expands to "hello world" which becomes a single pending element
+        assert_eq!(result, Some("arr=('hello world')".to_string()));
+    }
+
+    #[test]
+    fn test_array_assignment_keyed_element() {
+        let (mut state, limits) = make_ctx();
+        let mut ctx = InterpreterContext::new(&mut state, &limits);
+
+        // arr=([0]=foo [1]=bar)
+        let word = WordNode {
+            parts: vec![
+                WordPart::Literal(LiteralPart { value: "arr=([0]=foo [1]=bar)".to_string() }),
+            ],
+        };
+
+        let result = expand_local_array_assignment(&mut ctx, &word);
+        assert_eq!(result, Some("arr=([0]=foo [1]=bar)".to_string()));
+    }
+
+    #[test]
+    fn test_scalar_assignment_append() {
+        let (mut state, limits) = make_ctx();
+        let mut ctx = InterpreterContext::new(&mut state, &limits);
+
+        let word = WordNode {
+            parts: vec![
+                WordPart::Literal(LiteralPart { value: "foo+=bar".to_string() }),
+            ],
+        };
+
+        let result = expand_scalar_assignment_arg(&mut ctx, &word);
+        assert_eq!(result, Some("foo+=bar".to_string()));
+    }
+
+    #[test]
+    fn test_scalar_assignment_array_index() {
+        let (mut state, limits) = make_ctx();
+        let mut ctx = InterpreterContext::new(&mut state, &limits);
+
+        let word = WordNode {
+            parts: vec![
+                WordPart::Literal(LiteralPart { value: "arr[0]=val".to_string() }),
+            ],
+        };
+
+        let result = expand_scalar_assignment_arg(&mut ctx, &word);
+        assert_eq!(result, Some("arr[0]=val".to_string()));
     }
 }

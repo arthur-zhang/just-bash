@@ -49,6 +49,9 @@ pub trait FileSystem: Send + Sync {
     /// Write contents to a file.
     fn write_file(&self, path: &str, contents: &str) -> Result<(), std::io::Error>;
 
+    /// Append contents to a file.
+    fn append_file(&self, path: &str, contents: &str) -> Result<(), std::io::Error>;
+
     /// Check if a path exists.
     fn exists(&self, path: &str) -> bool;
 

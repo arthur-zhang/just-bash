@@ -303,8 +303,14 @@ pub fn handle_read(
     let mut consumed: usize = 0;
     let mut found_delimiter = true;
 
-    // Helper closure to consume from the appropriate source
-    let consume_input = |state: &mut InterpreterState, bytes_consumed: usize, effective_stdin: &str| {
+    // Helper closure to consume from the appropriate source.
+    // chars_consumed is the number of *characters* consumed, not bytes.
+    let consume_input = |state: &mut InterpreterState, chars_consumed: usize, effective_stdin: &str| {
+        // Convert character count to byte offset for string slicing
+        let bytes_consumed = effective_stdin.char_indices()
+            .nth(chars_consumed)
+            .map(|(idx, _)| idx)
+            .unwrap_or(effective_stdin.len());
         if file_descriptor >= 0 {
             if let Some(ref mut fds) = state.file_descriptors {
                 fds.insert(file_descriptor, effective_stdin[bytes_consumed..].to_string());
@@ -331,7 +337,7 @@ pub fn handle_read(
         // -N: Read exactly N characters (ignores delimiters, no IFS splitting)
         let to_read = (nchars_exact as usize).min(effective_stdin_chars.len());
         line = effective_stdin_chars[..to_read].iter().collect();
-        consumed = line.len();
+        consumed = to_read; // Use character count, not byte length
         found_delimiter = to_read >= nchars_exact as usize;
 
         // Consume from appropriate source
@@ -356,7 +362,7 @@ pub fn handle_read(
         let mut hit_delimiter = false;
         while input_pos < effective_stdin_chars.len() && char_count < nchars as usize {
             let ch = effective_stdin_chars[input_pos];
-            if effective_delimiter.starts_with(ch) {
+            if effective_delimiter.len() == 1 && ch == effective_delimiter.chars().next().unwrap() {
                 consumed = input_pos + 1;
                 hit_delimiter = true;
                 break;
@@ -369,7 +375,8 @@ pub fn handle_read(
                     consumed = input_pos;
                     continue;
                 }
-                if effective_delimiter.starts_with(next_char) {
+                let delim_first = effective_delimiter.chars().next().unwrap_or('\0');
+                if effective_delimiter.len() == 1 && next_char == delim_first {
                     // Backslash-delimiter: counts as one char (the escaped delimiter)
                     input_pos += 2;
                     char_count += 1;
@@ -398,9 +405,10 @@ pub fn handle_read(
         while input_pos < effective_stdin_chars.len() {
             let ch = effective_stdin_chars[input_pos];
 
-            // Check for delimiter
-            if effective_delimiter.starts_with(ch) {
-                consumed = input_pos + effective_delimiter.len();
+            // Check for delimiter - compare the full delimiter string starting at current position
+            let remaining_str: String = effective_stdin_chars[input_pos..].iter().collect();
+            if remaining_str.starts_with(&effective_delimiter) {
+                consumed = input_pos + effective_delimiter.chars().count();
                 found_delimiter = true;
                 break;
             }
@@ -415,7 +423,8 @@ pub fn handle_read(
                     continue;
                 }
 
-                if effective_delimiter.starts_with(next_char) {
+                let delim_first = effective_delimiter.chars().next().unwrap_or('\0');
+                if effective_delimiter.len() == 1 && next_char == delim_first {
                     // Backslash-delimiter: escape the delimiter, include it literally
                     line.push(next_char);
                     input_pos += 2;
@@ -632,5 +641,33 @@ mod tests {
         let result = handle_read(&mut state, &["-t".to_string(), "0".to_string()], "hello\n", -1);
         assert_eq!(result.exit_code, 0);
         assert_eq!(state.env.get("REPLY"), Some(&"".to_string()));
+    }
+
+    #[test]
+    fn test_read_nchars_exact_multibyte() {
+        // Test that -N counts characters, not bytes
+        let mut state = make_state();
+        // "你好世界" is 4 characters but 12 bytes in UTF-8
+        let result = handle_read(&mut state, &["-N".to_string(), "2".to_string()], "你好世界\n", -1);
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(state.env.get("REPLY"), Some(&"你好".to_string()));
+    }
+
+    #[test]
+    fn test_read_nchars_multibyte() {
+        // Test that -n counts characters, not bytes
+        let mut state = make_state();
+        let result = handle_read(&mut state, &["-n".to_string(), "3".to_string()], "café\n", -1);
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(state.env.get("REPLY"), Some(&"caf".to_string()));
+    }
+
+    #[test]
+    fn test_read_multibyte_delimiter() {
+        // Test delimiter comparison works correctly
+        let mut state = make_state();
+        let result = handle_read(&mut state, &["-d".to_string(), ":".to_string()], "héllo:world", -1);
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(state.env.get("REPLY"), Some(&"héllo".to_string()));
     }
 }

@@ -1,11 +1,14 @@
 // src/commands/mod.rs
 pub mod basename;
 pub mod cat;
+pub mod cp;
 pub mod dirname;
 pub mod head;
 pub mod mkdir;
 pub mod registry;
+pub mod rm;
 pub mod tail;
+pub mod touch;
 pub mod wc;
 pub mod types;
 pub mod utils;

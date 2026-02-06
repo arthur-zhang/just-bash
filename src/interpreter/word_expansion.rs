@@ -180,7 +180,7 @@ fn expand_part_no_glob(
             let limits = ExecutionLimits::default();
             let mut state_clone = state.clone();
             let mut ctx = InterpreterContext::new(&mut state_clone, &limits);
-            match evaluate_arithmetic(&mut ctx, &arith.expression.expression, false) {
+            match evaluate_arithmetic(&mut ctx, &arith.expression.expression, false, None) {
                 Ok(value) => value.to_string(),
                 Err(_) => "0".to_string(),
             }
@@ -637,7 +637,7 @@ fn expand_part_with_cmd_subst(
 
             let limits = ExecutionLimits::default();
             let mut ctx = InterpreterContext::new(state, &limits);
-            match evaluate_arithmetic(&mut ctx, &arith.expression.expression, false) {
+            match evaluate_arithmetic(&mut ctx, &arith.expression.expression, false, None) {
                 Ok(value) => (value.to_string(), String::new(), None),
                 Err(_) => ("0".to_string(), String::new(), None),
             }

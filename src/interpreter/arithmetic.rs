@@ -21,6 +21,14 @@ use crate::interpreter::errors::ArithmeticError;
 use crate::parser::{parse_arith_expr, parse_arith_number};
 
 // ============================================================================
+// Callback Types
+// ============================================================================
+
+/// Callback type for executing command substitutions in arithmetic expressions.
+/// Takes the command string and returns (stdout, stderr, exit_code).
+pub type ArithExecFn = Box<dyn Fn(&str) -> (String, String, i32)>;
+
+// ============================================================================
 // Binary Operators
 // ============================================================================
 
@@ -157,8 +165,20 @@ fn is_valid_identifier(name: &str) -> bool {
 
 /// Get a variable value, with support for special variables.
 fn get_variable(ctx: &InterpreterContext, name: &str) -> String {
-    // For now, just get from env - special variables would need more context
-    ctx.state.env.get(name).cloned().unwrap_or_default()
+    match name {
+        "?" => ctx.state.last_exit_code.to_string(),
+        "$" => ctx.state.bash_pid.to_string(),
+        "!" => {
+            if ctx.state.last_background_pid == 0 {
+                String::new()
+            } else {
+                ctx.state.last_background_pid.to_string()
+            }
+        }
+        "#" => ctx.state.env.get("#").cloned().unwrap_or_else(|| "0".to_string()),
+        "@" | "*" => ctx.state.env.get(name).cloned().unwrap_or_default(),
+        _ => ctx.state.env.get(name).cloned().unwrap_or_default(),
+    }
 }
 
 /// Get array elements as a list of (index, value) tuples.
@@ -193,8 +213,8 @@ fn get_array_elements(ctx: &InterpreterContext, array_name: &str) -> Vec<(Option
 // ============================================================================
 
 /// Expand braced parameter content like "j:-5" or "var:=default"
-/// Returns the expanded value as a string
-fn expand_braced_content(ctx: &mut InterpreterContext, content: &str) -> String {
+/// Returns the expanded value as a string, or an error for :? operator
+fn expand_braced_content(ctx: &mut InterpreterContext, content: &str) -> Result<String, ArithmeticError> {
     // Handle ${#var} - length
     if content.starts_with('#') {
         let var_name = &content[1..];
@@ -202,18 +222,18 @@ fn expand_braced_content(ctx: &mut InterpreterContext, content: &str) -> String 
         if var_name.ends_with("[@]") || var_name.ends_with("[*]") {
             let array_name = &var_name[..var_name.len() - 3];
             let elements = get_array_elements(ctx, array_name);
-            return elements.len().to_string();
+            return Ok(elements.len().to_string());
         }
         // Regular ${#var} - string length
         let value = ctx.state.env.get(var_name).cloned().unwrap_or_default();
-        return value.len().to_string();
+        return Ok(value.len().to_string());
     }
 
     // Handle ${!var} - indirection
     if content.starts_with('!') {
         let var_name = &content[1..];
         let indirect = ctx.state.env.get(var_name).cloned().unwrap_or_default();
-        return ctx.state.env.get(&indirect).cloned().unwrap_or_default();
+        return Ok(ctx.state.env.get(&indirect).cloned().unwrap_or_default());
     }
 
     // Find operator position
@@ -231,7 +251,7 @@ fn expand_braced_content(ctx: &mut InterpreterContext, content: &str) -> String 
 
     if op_index.is_none() {
         // Simple ${var} - just get the variable
-        return get_variable(ctx, content);
+        return Ok(get_variable(ctx, content));
     }
 
     let idx = op_index.unwrap();
@@ -246,39 +266,42 @@ fn expand_braced_content(ctx: &mut InterpreterContext, content: &str) -> String 
         ":-" | "-" => {
             let use_default = is_unset || (check_empty && is_empty);
             if use_default {
-                default_value.to_string()
+                Ok(default_value.to_string())
             } else {
-                value.cloned().unwrap_or_default()
+                Ok(value.cloned().unwrap_or_default())
             }
         }
         ":=" | "=" => {
             let use_default = is_unset || (check_empty && is_empty);
             if use_default {
                 ctx.state.env.insert(var_name.to_string(), default_value.to_string());
-                default_value.to_string()
+                Ok(default_value.to_string())
             } else {
-                value.cloned().unwrap_or_default()
+                Ok(value.cloned().unwrap_or_default())
             }
         }
         ":+" | "+" => {
             let use_alternative = !(is_unset || (check_empty && is_empty));
             if use_alternative {
-                default_value.to_string()
+                Ok(default_value.to_string())
             } else {
-                String::new()
+                Ok(String::new())
             }
         }
         ":?" | "?" => {
             let should_error = is_unset || (check_empty && is_empty);
             if should_error {
-                // In real implementation, this would throw an error
-                // For now, return empty string
-                String::new()
+                let msg = if default_value.is_empty() {
+                    format!("{}: parameter null or not set", var_name)
+                } else {
+                    default_value.to_string()
+                };
+                Err(ArithmeticError::new(msg, String::new(), String::new(), false))
             } else {
-                value.cloned().unwrap_or_default()
+                Ok(value.cloned().unwrap_or_default())
             }
         }
-        _ => value.cloned().unwrap_or_default(),
+        _ => Ok(value.cloned().unwrap_or_default()),
     }
 }
 
@@ -288,7 +311,12 @@ fn expand_braced_content(ctx: &mut InterpreterContext, content: &str) -> String 
 
 /// Parse and evaluate a string value as an arithmetic expression with full context.
 /// This properly handles expressions like "1+2+3" or "x+y" by parsing and evaluating them.
-fn evaluate_arith_value(ctx: &mut InterpreterContext, value: &str, is_expansion_context: bool) -> Result<i64, ArithmeticError> {
+fn evaluate_arith_value(
+    ctx: &mut InterpreterContext,
+    value: &str,
+    is_expansion_context: bool,
+    exec_fn: Option<&ArithExecFn>,
+) -> Result<i64, ArithmeticError> {
     let value = value.trim();
     if value.is_empty() {
         return Ok(0);
@@ -316,7 +344,7 @@ fn evaluate_arith_value(ctx: &mut InterpreterContext, value: &str, is_expansion_
         ));
     }
 
-    evaluate_arithmetic(ctx, &expr, is_expansion_context)
+    evaluate_arithmetic(ctx, &expr, is_expansion_context, exec_fn)
 }
 
 /// Recursively resolve a variable name to its numeric value.
@@ -329,6 +357,7 @@ fn resolve_arith_variable(
     name: &str,
     visited: &mut HashSet<String>,
     is_expansion_context: bool,
+    exec_fn: Option<&ArithExecFn>,
 ) -> Result<i64, ArithmeticError> {
     // Prevent infinite recursion
     if visited.contains(name) {
@@ -354,11 +383,11 @@ fn resolve_arith_variable(
 
     // If it's a valid identifier, recursively resolve
     if is_valid_identifier(trimmed) {
-        return resolve_arith_variable(ctx, trimmed, visited, is_expansion_context);
+        return resolve_arith_variable(ctx, trimmed, visited, is_expansion_context, exec_fn);
     }
 
     // Dynamic arithmetic: parse and evaluate
-    evaluate_arith_value(ctx, trimmed, is_expansion_context)
+    evaluate_arith_value(ctx, trimmed, is_expansion_context, exec_fn)
 }
 
 /// Main arithmetic evaluation function.
@@ -366,6 +395,7 @@ pub fn evaluate_arithmetic(
     ctx: &mut InterpreterContext,
     expr: &ArithExpr,
     is_expansion_context: bool,
+    exec_fn: Option<&ArithExecFn>,
 ) -> Result<i64, ArithmeticError> {
     match expr {
         ArithExpr::Number(node) => {
@@ -382,7 +412,7 @@ pub fn evaluate_arithmetic(
 
         ArithExpr::Variable(node) => {
             // Use recursive resolution - bash evaluates variable names recursively
-            resolve_arith_variable(ctx, &node.name, &mut HashSet::new(), is_expansion_context)
+            resolve_arith_variable(ctx, &node.name, &mut HashSet::new(), is_expansion_context, exec_fn)
         }
 
         ArithExpr::SpecialVar(node) => {
@@ -400,27 +430,39 @@ pub fn evaluate_arithmetic(
             }
             // If not a simple number, evaluate as arithmetic expression
             let (expr, _) = parse_arith_expr(trimmed, 0);
-            evaluate_arithmetic(ctx, &expr, is_expansion_context)
+            evaluate_arithmetic(ctx, &expr, is_expansion_context, exec_fn)
         }
 
         ArithExpr::Nested(node) => {
-            evaluate_arithmetic(ctx, &node.expression, is_expansion_context)
+            evaluate_arithmetic(ctx, &node.expression, is_expansion_context, exec_fn)
         }
 
-        ArithExpr::CommandSubst(_node) => {
-            // Execute the command and parse the result as a number
-            // For now, return 0 - command substitution needs execFn
-            Ok(0)
+        ArithExpr::CommandSubst(node) => {
+            if let Some(exec) = exec_fn {
+                let (stdout, stderr, _exit_code) = exec(&node.command);
+                // Append stderr to expansion_stderr if needed
+                if !stderr.is_empty() {
+                    if let Some(ref mut exp_stderr) = ctx.state.expansion_stderr {
+                        exp_stderr.push_str(&stderr);
+                    } else {
+                        ctx.state.expansion_stderr = Some(stderr);
+                    }
+                }
+                let output = stdout.trim();
+                Ok(output.parse::<i64>().unwrap_or(0))
+            } else {
+                Ok(0)
+            }
         }
 
         ArithExpr::BracedExpansion(node) => {
-            let expanded = expand_braced_content(ctx, &node.content);
+            let expanded = expand_braced_content(ctx, &node.content)?;
             Ok(expanded.parse::<i64>().unwrap_or(0))
         }
 
         ArithExpr::DynamicBase(node) => {
             // ${base}#value - expand base, then parse value in that base
-            let base_str = expand_braced_content(ctx, &node.base_expr);
+            let base_str = expand_braced_content(ctx, &node.base_expr)?;
             let base = base_str.parse::<i64>().unwrap_or(0);
             if base < 2 || base > 64 {
                 return Ok(0);
@@ -431,7 +473,7 @@ pub fn evaluate_arithmetic(
 
         ArithExpr::DynamicNumber(node) => {
             // ${zero}11 or ${zero}xAB - expand prefix, combine with suffix
-            let prefix = expand_braced_content(ctx, &node.prefix);
+            let prefix = expand_braced_content(ctx, &node.prefix)?;
             let num_str = format!("{}{}", prefix, node.suffix);
             Ok(parse_arith_number(&num_str).unwrap_or(0))
         }
@@ -446,7 +488,7 @@ pub fn evaluate_arithmetic(
             if let Some(ref string_key) = node.string_key {
                 let env_key = format!("{}_{}", node.array, string_key);
                 let array_value = ctx.state.env.get(&env_key).cloned().unwrap_or_default();
-                return evaluate_arith_value(ctx, &array_value, is_expansion_context);
+                return evaluate_arith_value(ctx, &array_value, is_expansion_context, exec_fn);
             }
 
             // Case 2: Associative array with variable name (no $ prefix) - A[K]
@@ -456,7 +498,7 @@ pub fn evaluate_arithmetic(
                         if !var_node.has_dollar_prefix {
                             let env_key = format!("{}_{}", node.array, var_node.name);
                             let array_value = ctx.state.env.get(&env_key).cloned().unwrap_or_default();
-                            return evaluate_arith_value(ctx, &array_value, is_expansion_context);
+                            return evaluate_arith_value(ctx, &array_value, is_expansion_context, exec_fn);
                         }
                     }
                 }
@@ -470,7 +512,7 @@ pub fn evaluate_arithmetic(
                             let expanded_key = get_arith_variable(ctx, &var_node.name);
                             let env_key = format!("{}_{}", node.array, expanded_key);
                             let array_value = ctx.state.env.get(&env_key).cloned().unwrap_or_default();
-                            return evaluate_arith_value(ctx, &array_value, is_expansion_context);
+                            return evaluate_arith_value(ctx, &array_value, is_expansion_context, exec_fn);
                         }
                     }
                 }
@@ -478,7 +520,7 @@ pub fn evaluate_arithmetic(
 
             // Case 4: Indexed array - A[expr]
             if let Some(ref index) = node.index {
-                let mut index_val = evaluate_arithmetic(ctx, index, is_expansion_context)?;
+                let mut index_val = evaluate_arithmetic(ctx, index, is_expansion_context, exec_fn)?;
 
                 // Handle negative indices - bash counts from max_index + 1
                 if index_val < 0 {
@@ -510,14 +552,14 @@ pub fn evaluate_arithmetic(
                 let env_key = format!("{}_{}", node.array, index_val);
                 let array_value = ctx.state.env.get(&env_key).cloned().unwrap_or_default();
                 if !array_value.is_empty() {
-                    return evaluate_arith_value(ctx, &array_value, is_expansion_context);
+                    return evaluate_arith_value(ctx, &array_value, is_expansion_context, exec_fn);
                 }
 
                 // Scalar decay: s[0] returns scalar value s
                 if index_val == 0 {
                     let scalar_value = ctx.state.env.get(&node.array).cloned().unwrap_or_default();
                     if !scalar_value.is_empty() {
-                        return evaluate_arith_value(ctx, &scalar_value, is_expansion_context);
+                        return evaluate_arith_value(ctx, &scalar_value, is_expansion_context, exec_fn);
                     }
                 }
 
@@ -591,43 +633,43 @@ pub fn evaluate_arithmetic(
         ArithExpr::Binary(node) => {
             // Short-circuit evaluation for logical operators
             if node.operator == ArithBinaryOperator::LogOr {
-                let left = evaluate_arithmetic(ctx, &node.left, is_expansion_context)?;
+                let left = evaluate_arithmetic(ctx, &node.left, is_expansion_context, exec_fn)?;
                 if left != 0 {
                     return Ok(1);
                 }
-                let right = evaluate_arithmetic(ctx, &node.right, is_expansion_context)?;
+                let right = evaluate_arithmetic(ctx, &node.right, is_expansion_context, exec_fn)?;
                 Ok(if right != 0 { 1 } else { 0 })
             } else if node.operator == ArithBinaryOperator::LogAnd {
-                let left = evaluate_arithmetic(ctx, &node.left, is_expansion_context)?;
+                let left = evaluate_arithmetic(ctx, &node.left, is_expansion_context, exec_fn)?;
                 if left == 0 {
                     return Ok(0);
                 }
-                let right = evaluate_arithmetic(ctx, &node.right, is_expansion_context)?;
+                let right = evaluate_arithmetic(ctx, &node.right, is_expansion_context, exec_fn)?;
                 Ok(if right != 0 { 1 } else { 0 })
             } else {
-                let left = evaluate_arithmetic(ctx, &node.left, is_expansion_context)?;
-                let right = evaluate_arithmetic(ctx, &node.right, is_expansion_context)?;
+                let left = evaluate_arithmetic(ctx, &node.left, is_expansion_context, exec_fn)?;
+                let right = evaluate_arithmetic(ctx, &node.right, is_expansion_context, exec_fn)?;
                 apply_binary_op(left, right, &node.operator)
             }
         }
 
         ArithExpr::Unary(node) => {
-            let operand = evaluate_arithmetic(ctx, &node.operand, is_expansion_context)?;
+            let operand = evaluate_arithmetic(ctx, &node.operand, is_expansion_context, exec_fn)?;
 
             // Handle ++/-- with side effects separately
             if matches!(node.operator, ArithUnaryOperator::Inc | ArithUnaryOperator::Dec) {
-                return handle_inc_dec(ctx, &node.operand, &node.operator, node.prefix, is_expansion_context, operand);
+                return handle_inc_dec(ctx, &node.operand, &node.operator, node.prefix, is_expansion_context, exec_fn, operand);
             }
 
             Ok(apply_unary_op(operand, &node.operator))
         }
 
         ArithExpr::Ternary(node) => {
-            let condition = evaluate_arithmetic(ctx, &node.condition, is_expansion_context)?;
+            let condition = evaluate_arithmetic(ctx, &node.condition, is_expansion_context, exec_fn)?;
             if condition != 0 {
-                evaluate_arithmetic(ctx, &node.consequent, is_expansion_context)
+                evaluate_arithmetic(ctx, &node.consequent, is_expansion_context, exec_fn)
             } else {
-                evaluate_arithmetic(ctx, &node.alternate, is_expansion_context)
+                evaluate_arithmetic(ctx, &node.alternate, is_expansion_context, exec_fn)
             }
         }
 
@@ -652,16 +694,18 @@ pub fn evaluate_arithmetic(
                         } else {
                             // A[$key] -> expand $key to get the actual key
                             let expanded_key = get_arith_variable(ctx, &var_node.name);
-                            env_key = format!("{}_{}", node.variable, expanded_key.as_str());
+                            // When variable expands to empty, use backslash as the key (OSH behavior)
+                            let key = if expanded_key.is_empty() { "\\" } else { expanded_key.as_str() };
+                            env_key = format!("{}_{}", node.variable, key);
                         }
                     } else {
                         // For non-variable subscripts on associative arrays
-                        let index = evaluate_arithmetic(ctx, subscript, is_expansion_context)?;
+                        let index = evaluate_arithmetic(ctx, subscript, is_expansion_context, exec_fn)?;
                         env_key = format!("{}_{}", node.variable, index);
                     }
                 } else {
                     // For indexed arrays, evaluate the subscript as arithmetic
-                    let mut index = evaluate_arithmetic(ctx, subscript, is_expansion_context)?;
+                    let mut index = evaluate_arithmetic(ctx, subscript, is_expansion_context, exec_fn)?;
 
                     // Handle negative indices
                     if index < 0 {
@@ -682,26 +726,26 @@ pub fn evaluate_arithmetic(
             let current = ctx.state.env.get(&env_key)
                 .and_then(|v| v.parse::<i64>().ok())
                 .unwrap_or(0);
-            let value = evaluate_arithmetic(ctx, &node.value, is_expansion_context)?;
+            let value = evaluate_arithmetic(ctx, &node.value, is_expansion_context, exec_fn)?;
             let new_value = apply_assignment_op(current, value, &node.operator);
             ctx.state.env.insert(env_key, new_value.to_string());
             Ok(new_value)
         }
 
         ArithExpr::Group(node) => {
-            evaluate_arithmetic(ctx, &node.expression, is_expansion_context)
+            evaluate_arithmetic(ctx, &node.expression, is_expansion_context, exec_fn)
         }
 
         ArithExpr::Concat(node) => {
             // Concatenate all parts to form a dynamic variable name or number
             let mut concatenated = String::new();
             for part in &node.parts {
-                concatenated.push_str(&eval_concat_part_to_string(ctx, part, is_expansion_context)?);
+                concatenated.push_str(&eval_concat_part_to_string(ctx, part, is_expansion_context, exec_fn)?);
             }
 
             // If the result is a valid identifier, look it up as a variable
             if is_valid_identifier(&concatenated) {
-                resolve_arith_variable(ctx, &concatenated, &mut HashSet::new(), is_expansion_context)
+                resolve_arith_variable(ctx, &concatenated, &mut HashSet::new(), is_expansion_context, exec_fn)
             } else {
                 // Otherwise parse as a number
                 Ok(concatenated.trim().parse::<i64>().unwrap_or(0))
@@ -715,7 +759,7 @@ pub fn evaluate_arithmetic(
             match &node.target {
                 ArithExpr::Concat(concat_node) => {
                     for part in &concat_node.parts {
-                        var_name.push_str(&eval_concat_part_to_string(ctx, part, is_expansion_context)?);
+                        var_name.push_str(&eval_concat_part_to_string(ctx, part, is_expansion_context, exec_fn)?);
                     }
                 }
                 ArithExpr::Variable(var_node) => {
@@ -734,7 +778,7 @@ pub fn evaluate_arithmetic(
 
             // Build the env key - include subscript for array assignment
             let env_key = if let Some(ref subscript) = node.subscript {
-                let index = evaluate_arithmetic(ctx, subscript, is_expansion_context)?;
+                let index = evaluate_arithmetic(ctx, subscript, is_expansion_context, exec_fn)?;
                 format!("{}_{}", var_name, index)
             } else {
                 var_name
@@ -743,7 +787,7 @@ pub fn evaluate_arithmetic(
             let current = ctx.state.env.get(&env_key)
                 .and_then(|v| v.parse::<i64>().ok())
                 .unwrap_or(0);
-            let value = evaluate_arithmetic(ctx, &node.value, is_expansion_context)?;
+            let value = evaluate_arithmetic(ctx, &node.value, is_expansion_context, exec_fn)?;
             let new_value = apply_assignment_op(current, value, &node.operator);
             ctx.state.env.insert(env_key, new_value.to_string());
             Ok(new_value)
@@ -755,7 +799,7 @@ pub fn evaluate_arithmetic(
             match &node.name_expr {
                 ArithExpr::Concat(concat_node) => {
                     for part in &concat_node.parts {
-                        var_name.push_str(&eval_concat_part_to_string(ctx, part, is_expansion_context)?);
+                        var_name.push_str(&eval_concat_part_to_string(ctx, part, is_expansion_context, exec_fn)?);
                     }
                 }
                 ArithExpr::Variable(var_node) => {
@@ -772,12 +816,12 @@ pub fn evaluate_arithmetic(
                 return Ok(0); // Invalid variable name
             }
 
-            let index = evaluate_arithmetic(ctx, &node.subscript, is_expansion_context)?;
+            let index = evaluate_arithmetic(ctx, &node.subscript, is_expansion_context, exec_fn)?;
             let env_key = format!("{}_{}", var_name, index);
             let value = ctx.state.env.get(&env_key).cloned().unwrap_or_default();
             if !value.is_empty() {
                 // Parse the value as arithmetic (handles expressions like "1+2+3")
-                return evaluate_arith_value(ctx, &value, is_expansion_context);
+                return evaluate_arith_value(ctx, &value, is_expansion_context, exec_fn);
             }
             Ok(0)
         }
@@ -791,6 +835,7 @@ fn handle_inc_dec(
     operator: &ArithUnaryOperator,
     prefix: bool,
     is_expansion_context: bool,
+    exec_fn: Option<&ArithExecFn>,
     eval_operand: i64,
 ) -> Result<i64, ArithmeticError> {
     let is_inc = *operator == ArithUnaryOperator::Inc;
@@ -820,11 +865,11 @@ fn handle_inc_dec(
                             format!("{}_{}", arr_node.array, expanded_key)
                         }
                     } else {
-                        let idx = evaluate_arithmetic(ctx, index, is_expansion_context)?;
+                        let idx = evaluate_arithmetic(ctx, index, is_expansion_context, exec_fn)?;
                         format!("{}_{}", arr_node.array, idx)
                     }
                 } else {
-                    let idx = evaluate_arithmetic(ctx, index, is_expansion_context)?;
+                    let idx = evaluate_arithmetic(ctx, index, is_expansion_context, exec_fn)?;
                     format!("{}_{}", arr_node.array, idx)
                 }
             } else {
@@ -839,7 +884,7 @@ fn handle_inc_dec(
             // Handle dynamic variable name increment/decrement: x$foo++
             let mut var_name = String::new();
             for part in &concat_node.parts {
-                var_name.push_str(&eval_concat_part_to_string(ctx, part, is_expansion_context)?);
+                var_name.push_str(&eval_concat_part_to_string(ctx, part, is_expansion_context, exec_fn)?);
             }
 
             if is_valid_identifier(&var_name) {
@@ -856,7 +901,7 @@ fn handle_inc_dec(
             match &dyn_node.name_expr {
                 ArithExpr::Concat(concat_node) => {
                     for part in &concat_node.parts {
-                        var_name.push_str(&eval_concat_part_to_string(ctx, part, is_expansion_context)?);
+                        var_name.push_str(&eval_concat_part_to_string(ctx, part, is_expansion_context, exec_fn)?);
                     }
                 }
                 ArithExpr::Variable(var_node) => {
@@ -870,7 +915,7 @@ fn handle_inc_dec(
             }
 
             if is_valid_identifier(&var_name) {
-                let index = evaluate_arithmetic(ctx, &dyn_node.subscript, is_expansion_context)?;
+                let index = evaluate_arithmetic(ctx, &dyn_node.subscript, is_expansion_context, exec_fn)?;
                 let env_key = format!("{}_{}", var_name, index);
                 ctx.state.env.insert(env_key, new_value.to_string());
                 Ok(if prefix { new_value } else { eval_operand })
@@ -888,6 +933,7 @@ fn eval_concat_part_to_string(
     ctx: &mut InterpreterContext,
     part: &ArithExpr,
     is_expansion_context: bool,
+    exec_fn: Option<&ArithExecFn>,
 ) -> Result<String, ArithmeticError> {
     match part {
         ArithExpr::Variable(var_node) => {
@@ -907,30 +953,42 @@ fn eval_concat_part_to_string(
         ArithExpr::SingleQuote(_node) => {
             // For single quotes in concatenation context, evaluate through main evaluator
             // which will handle the expansion vs command context distinction
-            let val = evaluate_arithmetic(ctx, part, is_expansion_context)?;
+            let val = evaluate_arithmetic(ctx, part, is_expansion_context, exec_fn)?;
             Ok(val.to_string())
         }
 
         ArithExpr::BracedExpansion(node) => {
-            Ok(expand_braced_content(ctx, &node.content))
+            expand_braced_content(ctx, &node.content)
         }
 
-        ArithExpr::CommandSubst(_node) => {
-            // Command substitution needs execFn - for now return "0"
-            Ok("0".to_string())
+        ArithExpr::CommandSubst(node) => {
+            if let Some(exec) = exec_fn {
+                let (stdout, stderr, _exit_code) = exec(&node.command);
+                // Append stderr to expansion_stderr if needed
+                if !stderr.is_empty() {
+                    if let Some(ref mut exp_stderr) = ctx.state.expansion_stderr {
+                        exp_stderr.push_str(&stderr);
+                    } else {
+                        ctx.state.expansion_stderr = Some(stderr);
+                    }
+                }
+                Ok(stdout.trim().to_string())
+            } else {
+                Ok("0".to_string())
+            }
         }
 
         ArithExpr::Concat(concat_node) => {
             let mut result = String::new();
             for p in &concat_node.parts {
-                result.push_str(&eval_concat_part_to_string(ctx, p, is_expansion_context)?);
+                result.push_str(&eval_concat_part_to_string(ctx, p, is_expansion_context, exec_fn)?);
             }
             Ok(result)
         }
 
         _ => {
             // Evaluate other expressions as arithmetic
-            let val = evaluate_arithmetic(ctx, part, is_expansion_context)?;
+            let val = evaluate_arithmetic(ctx, part, is_expansion_context, exec_fn)?;
             Ok(val.to_string())
         }
     }
@@ -997,5 +1055,110 @@ mod tests {
         assert!(!is_valid_identifier(""));
         assert!(!is_valid_identifier("123foo"));
         assert!(!is_valid_identifier("foo-bar"));
+    }
+
+    #[test]
+    fn test_get_variable_special_vars() {
+        use crate::interpreter::types::{InterpreterState, ExecutionLimits, InterpreterContext};
+
+        let mut state = InterpreterState::default();
+        state.last_exit_code = 42;
+        state.bash_pid = 12345;
+        state.last_background_pid = 9999;
+        state.env.insert("#".to_string(), "3".to_string());
+
+        let limits = ExecutionLimits::default();
+        let ctx = InterpreterContext::new(&mut state, &limits);
+
+        assert_eq!(get_variable(&ctx, "?"), "42");
+        assert_eq!(get_variable(&ctx, "$"), "12345");
+        assert_eq!(get_variable(&ctx, "!"), "9999");
+        assert_eq!(get_variable(&ctx, "#"), "3");
+    }
+
+    #[test]
+    fn test_get_variable_special_vars_empty_background_pid() {
+        use crate::interpreter::types::{InterpreterState, ExecutionLimits, InterpreterContext};
+
+        let mut state = InterpreterState::default();
+        state.last_background_pid = 0;
+
+        let limits = ExecutionLimits::default();
+        let ctx = InterpreterContext::new(&mut state, &limits);
+
+        assert_eq!(get_variable(&ctx, "!"), "");
+    }
+
+    #[test]
+    fn test_expand_braced_content_error_operator() {
+        use crate::interpreter::types::{InterpreterState, ExecutionLimits, InterpreterContext};
+
+        let mut state = InterpreterState::default();
+        let limits = ExecutionLimits::default();
+        let mut ctx = InterpreterContext::new(&mut state, &limits);
+
+        // Test :? with unset variable
+        let result = expand_braced_content(&mut ctx, "unset_var:?custom error");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.message, "custom error");
+
+        // Test :? with default message
+        let result = expand_braced_content(&mut ctx, "unset_var:?");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.message.contains("parameter null or not set"));
+    }
+
+    #[test]
+    fn test_expand_braced_content_error_operator_set_var() {
+        use crate::interpreter::types::{InterpreterState, ExecutionLimits, InterpreterContext};
+
+        let mut state = InterpreterState::default();
+        state.env.insert("set_var".to_string(), "value".to_string());
+        let limits = ExecutionLimits::default();
+        let mut ctx = InterpreterContext::new(&mut state, &limits);
+
+        // Test :? with set variable - should return value
+        let result = expand_braced_content(&mut ctx, "set_var:?error");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "value");
+    }
+
+    #[test]
+    fn test_command_subst_with_exec_fn() {
+        use crate::interpreter::types::{InterpreterState, ExecutionLimits, InterpreterContext};
+        use crate::parser::parse_arith_expr;
+
+        let mut state = InterpreterState::default();
+        let limits = ExecutionLimits::default();
+        let mut ctx = InterpreterContext::new(&mut state, &limits);
+
+        // Create a mock exec function that returns "42"
+        let exec_fn: ArithExecFn = Box::new(|_cmd: &str| {
+            ("42".to_string(), String::new(), 0)
+        });
+
+        // Parse and evaluate $(echo 42)
+        let (expr, _) = parse_arith_expr("$(echo 42)", 0);
+        let result = evaluate_arithmetic(&mut ctx, &expr, false, Some(&exec_fn));
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 42);
+    }
+
+    #[test]
+    fn test_command_subst_without_exec_fn() {
+        use crate::interpreter::types::{InterpreterState, ExecutionLimits, InterpreterContext};
+        use crate::parser::parse_arith_expr;
+
+        let mut state = InterpreterState::default();
+        let limits = ExecutionLimits::default();
+        let mut ctx = InterpreterContext::new(&mut state, &limits);
+
+        // Parse and evaluate $(echo 42) without exec_fn - should return 0
+        let (expr, _) = parse_arith_expr("$(echo 42)", 0);
+        let result = evaluate_arithmetic(&mut ctx, &expr, false, None);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 0);
     }
 }

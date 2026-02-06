@@ -92,7 +92,7 @@ pub fn handle_let(state: &mut InterpreterState, args: &[String]) -> BuiltinResul
         }
 
         // Evaluate the expression
-        match evaluate_arithmetic(&mut ctx, &arith_expr, false) {
+        match evaluate_arithmetic(&mut ctx, &arith_expr, false, None) {
             Ok(result) => {
                 last_result = result;
             }

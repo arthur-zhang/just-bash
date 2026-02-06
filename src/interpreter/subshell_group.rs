@@ -284,14 +284,14 @@ pub fn execute_subshell<F>(
     mut execute_statement: F,
 ) -> Result<ExecResult, InterpreterError>
 where
-    F: FnMut(&crate::StatementNode) -> Result<ExecResult, InterpreterError>,
+    F: FnMut(&mut InterpreterState, &crate::StatementNode) -> Result<ExecResult, InterpreterError>,
 {
     let saved = prepare_subshell(state, stdin);
 
     let mut result = CompoundResult::new();
 
     for stmt in body {
-        match execute_statement(stmt) {
+        match execute_statement(state, stmt) {
             Ok(res) => result.append(&res),
             Err(InterpreterError::ExecutionLimit(e)) => {
                 // ExecutionLimitError must always propagate - these are safety limits
@@ -370,14 +370,14 @@ pub fn execute_group<F>(
     mut execute_statement: F,
 ) -> Result<ExecResult, InterpreterError>
 where
-    F: FnMut(&crate::StatementNode) -> Result<ExecResult, InterpreterError>,
+    F: FnMut(&mut InterpreterState, &crate::StatementNode) -> Result<ExecResult, InterpreterError>,
 {
     let saved = prepare_group(state, stdin);
 
     let mut result = CompoundResult::new();
 
     for stmt in body {
-        match execute_statement(stmt) {
+        match execute_statement(state, stmt) {
             Ok(res) => result.append(&res),
             Err(InterpreterError::ExecutionLimit(e)) => {
                 // ExecutionLimitError must always propagate - these are safety limits
@@ -587,7 +587,7 @@ mod tests {
         let mut state = make_state();
 
         // Execute subshell with a simple callback that returns success
-        let result = execute_subshell(&mut state, &[], None, |_stmt| {
+        let result = execute_subshell(&mut state, &[], None, |_state, _stmt| {
             Ok(ExecResult {
                 stdout: "hello".to_string(),
                 stderr: String::new(),
@@ -606,7 +606,7 @@ mod tests {
         let mut state = make_state();
 
         // Execute group with a simple callback that returns success
-        let result = execute_group(&mut state, &[], None, |_stmt| {
+        let result = execute_group(&mut state, &[], None, |_state, _stmt| {
             Ok(ExecResult {
                 stdout: "hello".to_string(),
                 stderr: String::new(),

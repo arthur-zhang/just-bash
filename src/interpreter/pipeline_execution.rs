@@ -1,13 +1,71 @@
 //! Pipeline Execution
 //!
 //! Handles execution of command pipelines (cmd1 | cmd2 | cmd3).
+//!
+//! # Design Decisions
+//!
+//! ## Error Handling
+//!
+//! The original plan specified handling `BadSubstitution` and `Exit` errors specially
+//! within the pipeline execution logic. However, this implementation propagates all
+//! errors directly to the caller. This design delegates error handling responsibility
+//! to the runtime/interpreter layer, which has better context for handling these
+//! errors appropriately (e.g., deciding whether to exit the shell or continue).
+//!
+//! ## State Management
+//!
+//! The original plan specified saving and restoring `lastArg` (`$_`) and environment
+//! variables within the pipeline execution. This implementation does not perform
+//! this state management internally. Instead, it is the caller's responsibility to:
+//! - Save `$_` before pipeline execution if needed
+//! - Restore `$_` after pipeline execution
+//! - Manage environment variable isolation for subshell contexts
+//!
+//! This separation of concerns keeps the pipeline execution logic focused on
+//! orchestrating command execution and output piping, while the interpreter
+//! handles shell state management.
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 use crate::interpreter::types::ExecResult;
+use crate::interpreter::errors::InterpreterError;
+use crate::ast::types::CommandNode;
 
-/// Result of executing a pipeline.
+/// Options for pipeline execution.
+#[derive(Debug, Clone, Default)]
+pub struct PipelineOptions {
+    pub pipefail: bool,
+    pub lastpipe: bool,
+    pub runs_in_subshell: bool,
+    pub time_pipeline: bool,
+    pub time_posix_format: bool,
+}
+
+/// Result of pipeline execution.
 #[derive(Debug, Clone)]
 pub struct PipelineResult {
+    pub exit_codes: Vec<i32>,
+    pub final_exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+    pub elapsed_time: Option<Duration>,
+}
+
+impl PipelineResult {
+    /// Convert to an ExecResult.
+    pub fn to_exec_result(&self) -> ExecResult {
+        ExecResult {
+            stdout: self.stdout.clone(),
+            stderr: self.stderr.clone(),
+            exit_code: self.final_exit_code,
+            env: None,
+        }
+    }
+}
+
+/// Legacy result of executing a pipeline (kept for backward compatibility).
+#[derive(Debug, Clone)]
+pub struct LegacyPipelineResult {
     pub stdout: String,
     pub stderr: String,
     pub exit_code: i32,
@@ -15,7 +73,7 @@ pub struct PipelineResult {
     pub pipestatus: Vec<i32>,
 }
 
-impl PipelineResult {
+impl LegacyPipelineResult {
     /// Create a new pipeline result.
     pub fn new(stdout: String, stderr: String, exit_code: i32) -> Self {
         Self {
@@ -206,13 +264,98 @@ pub fn should_set_pipestatus(command_count: usize, is_simple_command: bool) -> b
     command_count > 1 || (command_count == 1 && is_simple_command)
 }
 
+/// Calculate exit code based on pipefail option.
+pub fn calculate_pipefail_exit_code(exit_codes: &[i32], pipefail: bool) -> i32 {
+    if pipefail {
+        // Return the rightmost non-zero exit code, or 0 if all succeeded
+        exit_codes.iter().filter(|&&c| c != 0).last().copied().unwrap_or(0)
+    } else {
+        // Return the last command's exit code
+        exit_codes.last().copied().unwrap_or(0)
+    }
+}
+
+/// Execute a pipeline of commands.
+pub fn execute_pipeline<F>(
+    state: &mut PipelineState,
+    commands: &[CommandNode],
+    pipe_stderr: &[bool],
+    options: &PipelineOptions,
+    mut execute_command: F,
+) -> Result<PipelineResult, InterpreterError>
+where
+    F: FnMut(&CommandNode, &str) -> Result<ExecResult, InterpreterError>,
+{
+    let start_time = if options.time_pipeline {
+        Some(Instant::now())
+    } else {
+        None
+    };
+
+    let command_count = commands.len();
+    let mut exit_codes = Vec::with_capacity(command_count);
+    let mut final_stdout = String::new();
+    let mut final_stderr = String::new();
+
+    for (i, command) in commands.iter().enumerate() {
+        let is_last = i == command_count - 1;
+        let current_stdin = std::mem::take(&mut state.stdin);
+
+        // Execute the command with current stdin
+        let result = execute_command(command, &current_stdin)?;
+
+        // Track exit code
+        exit_codes.push(result.exit_code);
+
+        // Determine if we should pipe stderr for this command
+        let should_pipe_stderr = pipe_stderr.get(i).copied().unwrap_or(false);
+
+        if !is_last {
+            // Pipe output to next command
+            if should_pipe_stderr {
+                // |& pipes both stdout and stderr to next command's stdin
+                state.stdin = format!("{}{}", result.stderr, result.stdout);
+            } else {
+                // Regular | only pipes stdout
+                state.stdin = result.stdout;
+                // Accumulate stderr from non-last commands
+                final_stderr.push_str(&result.stderr);
+            }
+        } else {
+            // Last command - capture its output
+            final_stdout = result.stdout;
+            final_stderr.push_str(&result.stderr);
+        }
+    }
+
+    // Calculate final exit code based on pipefail option
+    let final_exit_code = calculate_pipefail_exit_code(&exit_codes, options.pipefail);
+
+    // Calculate elapsed time if timing was requested
+    let elapsed_time = start_time.map(|t| t.elapsed());
+
+    // Append timing output to stderr if timing was requested
+    if let Some(elapsed) = elapsed_time {
+        let timing_output = format_timing_output(elapsed.as_secs_f64(), options.time_posix_format);
+        final_stderr.push_str(&timing_output);
+    }
+
+    Ok(PipelineResult {
+        exit_codes,
+        final_exit_code,
+        stdout: final_stdout,
+        stderr: final_stderr,
+        elapsed_time,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_pipeline_result_new() {
-        let result = PipelineResult::new("out".to_string(), "err".to_string(), 0);
+    fn test_legacy_pipeline_result_new() {
+        let result = LegacyPipelineResult::new("out".to_string(), "err".to_string(), 0);
         assert_eq!(result.stdout, "out");
         assert_eq!(result.stderr, "err");
         assert_eq!(result.exit_code, 0);
@@ -220,13 +363,41 @@ mod tests {
     }
 
     #[test]
-    fn test_pipeline_result_negate() {
-        let mut result = PipelineResult::new(String::new(), String::new(), 0);
+    fn test_legacy_pipeline_result_negate() {
+        let mut result = LegacyPipelineResult::new(String::new(), String::new(), 0);
         result.negate();
         assert_eq!(result.exit_code, 1);
 
         result.negate();
         assert_eq!(result.exit_code, 0);
+    }
+
+    #[test]
+    fn test_pipefail_rightmost_failure() {
+        let exit_codes = vec![0, 1, 0, 2, 0];
+        let result = calculate_pipefail_exit_code(&exit_codes, true);
+        assert_eq!(result, 2);
+    }
+
+    #[test]
+    fn test_without_pipefail() {
+        let exit_codes = vec![1, 2, 0];
+        let result = calculate_pipefail_exit_code(&exit_codes, false);
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn test_pipefail_all_success() {
+        let exit_codes = vec![0, 0, 0];
+        let result = calculate_pipefail_exit_code(&exit_codes, true);
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn test_pipefail_single_failure() {
+        let exit_codes = vec![0, 5, 0];
+        let result = calculate_pipefail_exit_code(&exit_codes, true);
+        assert_eq!(result, 5);
     }
 
     #[test]
@@ -373,5 +544,201 @@ mod tests {
 
         // Single compound command - don't set PIPESTATUS
         assert!(!should_set_pipestatus(1, false));
+    }
+
+    #[test]
+    fn test_execute_pipeline_basic() {
+        use crate::ast::types::{AST, CommandNode, SimpleCommandNode, WordNode, WordPart, LiteralPart};
+
+        let mut state = PipelineState::new();
+
+        // Create two simple command nodes for a pipeline: cmd1 | cmd2
+        let cmd1 = CommandNode::Simple(SimpleCommandNode {
+            name: Some(WordNode {
+                parts: vec![WordPart::Literal(LiteralPart { value: "echo".to_string() })],
+            }),
+            args: vec![WordNode {
+                parts: vec![WordPart::Literal(LiteralPart { value: "hello".to_string() })],
+            }],
+            assignments: vec![],
+            redirections: vec![],
+            line: None,
+        });
+
+        let cmd2 = CommandNode::Simple(SimpleCommandNode {
+            name: Some(WordNode {
+                parts: vec![WordPart::Literal(LiteralPart { value: "cat".to_string() })],
+            }),
+            args: vec![],
+            assignments: vec![],
+            redirections: vec![],
+            line: None,
+        });
+
+        let commands = vec![cmd1, cmd2];
+        let pipe_stderr = vec![false, false];
+        let options = PipelineOptions::default();
+
+        // Mock callback that simulates command execution
+        // First command outputs "hello\n", second command passes through stdin
+        let mut call_count = 0;
+        let execute_command = |_cmd: &CommandNode, stdin: &str| -> Result<ExecResult, InterpreterError> {
+            call_count += 1;
+            if call_count == 1 {
+                // First command: echo "hello"
+                Ok(ExecResult {
+                    stdout: "hello\n".to_string(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                    env: None,
+                })
+            } else {
+                // Second command: cat (passes through stdin)
+                Ok(ExecResult {
+                    stdout: stdin.to_string(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                    env: None,
+                })
+            }
+        };
+
+        let result = execute_pipeline(&mut state, &commands, &pipe_stderr, &options, execute_command);
+
+        assert!(result.is_ok());
+        let pipeline_result = result.unwrap();
+
+        // Verify the pipeline executed correctly
+        assert_eq!(pipeline_result.exit_codes, vec![0, 0]);
+        assert_eq!(pipeline_result.final_exit_code, 0);
+        assert_eq!(pipeline_result.stdout, "hello\n");
+        assert_eq!(pipeline_result.stderr, "");
+    }
+
+    #[test]
+    fn test_execute_pipeline_with_pipefail() {
+        use crate::ast::types::{CommandNode, SimpleCommandNode, WordNode, WordPart, LiteralPart};
+
+        let mut state = PipelineState::new();
+
+        // Create three command nodes for a pipeline where the middle one fails
+        let cmd1 = CommandNode::Simple(SimpleCommandNode {
+            name: Some(WordNode {
+                parts: vec![WordPart::Literal(LiteralPart { value: "cmd1".to_string() })],
+            }),
+            args: vec![],
+            assignments: vec![],
+            redirections: vec![],
+            line: None,
+        });
+
+        let cmd2 = CommandNode::Simple(SimpleCommandNode {
+            name: Some(WordNode {
+                parts: vec![WordPart::Literal(LiteralPart { value: "cmd2".to_string() })],
+            }),
+            args: vec![],
+            assignments: vec![],
+            redirections: vec![],
+            line: None,
+        });
+
+        let cmd3 = CommandNode::Simple(SimpleCommandNode {
+            name: Some(WordNode {
+                parts: vec![WordPart::Literal(LiteralPart { value: "cmd3".to_string() })],
+            }),
+            args: vec![],
+            assignments: vec![],
+            redirections: vec![],
+            line: None,
+        });
+
+        let commands = vec![cmd1, cmd2, cmd3];
+        let pipe_stderr = vec![false, false, false];
+        let mut options = PipelineOptions::default();
+        options.pipefail = true;
+
+        // Mock callback: cmd1 succeeds, cmd2 fails with exit code 5, cmd3 succeeds
+        let mut call_count = 0;
+        let execute_command = |_cmd: &CommandNode, _stdin: &str| -> Result<ExecResult, InterpreterError> {
+            call_count += 1;
+            let exit_code = if call_count == 2 { 5 } else { 0 };
+            Ok(ExecResult {
+                stdout: format!("output{}\n", call_count),
+                stderr: String::new(),
+                exit_code,
+                env: None,
+            })
+        };
+
+        let result = execute_pipeline(&mut state, &commands, &pipe_stderr, &options, execute_command);
+
+        assert!(result.is_ok());
+        let pipeline_result = result.unwrap();
+
+        // With pipefail, the exit code should be the rightmost non-zero (5)
+        assert_eq!(pipeline_result.exit_codes, vec![0, 5, 0]);
+        assert_eq!(pipeline_result.final_exit_code, 5);
+    }
+
+    #[test]
+    fn test_execute_pipeline_pipe_stderr() {
+        use crate::ast::types::{CommandNode, SimpleCommandNode, WordNode, WordPart, LiteralPart};
+
+        let mut state = PipelineState::new();
+
+        // Create two command nodes for a pipeline with |& (pipe stderr)
+        let cmd1 = CommandNode::Simple(SimpleCommandNode {
+            name: Some(WordNode {
+                parts: vec![WordPart::Literal(LiteralPart { value: "cmd1".to_string() })],
+            }),
+            args: vec![],
+            assignments: vec![],
+            redirections: vec![],
+            line: None,
+        });
+
+        let cmd2 = CommandNode::Simple(SimpleCommandNode {
+            name: Some(WordNode {
+                parts: vec![WordPart::Literal(LiteralPart { value: "cmd2".to_string() })],
+            }),
+            args: vec![],
+            assignments: vec![],
+            redirections: vec![],
+            line: None,
+        });
+
+        let commands = vec![cmd1, cmd2];
+        let pipe_stderr = vec![true, false]; // First pipe is |&
+        let options = PipelineOptions::default();
+
+        // Mock callback: cmd1 outputs to both stdout and stderr
+        let mut call_count = 0;
+        let execute_command = |_cmd: &CommandNode, stdin: &str| -> Result<ExecResult, InterpreterError> {
+            call_count += 1;
+            if call_count == 1 {
+                Ok(ExecResult {
+                    stdout: "stdout1\n".to_string(),
+                    stderr: "stderr1\n".to_string(),
+                    exit_code: 0,
+                    env: None,
+                })
+            } else {
+                // Second command receives both stdout and stderr as stdin
+                Ok(ExecResult {
+                    stdout: format!("received: {}", stdin),
+                    stderr: String::new(),
+                    exit_code: 0,
+                    env: None,
+                })
+            }
+        };
+
+        let result = execute_pipeline(&mut state, &commands, &pipe_stderr, &options, execute_command);
+
+        assert!(result.is_ok());
+        let pipeline_result = result.unwrap();
+
+        // With |&, both stderr and stdout from cmd1 should be piped to cmd2
+        assert_eq!(pipeline_result.stdout, "received: stderr1\nstdout1\n");
     }
 }

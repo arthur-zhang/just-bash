@@ -191,7 +191,7 @@ fn evaluate_array_index(state: &mut InterpreterState, index_expr: &str) -> Optio
     let mut ctx = InterpreterContext::new(state, &limits);
 
     let (arith_expr, _) = parse_arith_expr(index_expr, 0);
-    match evaluate_arithmetic(&mut ctx, &arith_expr, false) {
+    match evaluate_arithmetic(&mut ctx, &arith_expr, false, None) {
         Ok(result) => Some(result),
         Err(_) => {
             // If parsing fails, try to parse as simple number

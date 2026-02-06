@@ -187,6 +187,131 @@ const BUILTIN_HELP: &[BuiltinHelp] = &[
         synopsis: "wait [-fn] [id ...]",
         description: "Wait for job completion and return exit status.\n    Waits for each process identified by an ID, which may be a process ID or a\n    job specification, and reports its termination status.\n    Exit Status:\n    Returns the status of the last ID; fails if ID is invalid or an invalid\n    option is given.",
     },
+    BuiltinHelp {
+        name: "bg",
+        synopsis: "bg [job_spec ...]",
+        description: "Move jobs to the background.",
+    },
+    BuiltinHelp {
+        name: "builtin",
+        synopsis: "builtin [shell-builtin [arg ...]]",
+        description: "Execute shell builtins.",
+    },
+    BuiltinHelp {
+        name: "caller",
+        synopsis: "caller [expr]",
+        description: "Return the context of the current subroutine call.",
+    },
+    BuiltinHelp {
+        name: "compgen",
+        synopsis: "compgen [-abcdefgjksuv] [-o option] [-A action] [-G globpat] [-W wordlist] [-F function] [-C command] [-X filterpat] [-P prefix] [-S suffix] [word]",
+        description: "Display possible completions depending on the options.",
+    },
+    BuiltinHelp {
+        name: "complete",
+        synopsis: "complete [-abcdefgjksuv] [-pr] [-DEI] [-o option] [-A action] [-G globpat] [-W wordlist] [-F function] [-C command] [-X filterpat] [-P prefix] [-S suffix] [name ...]",
+        description: "Specify how arguments are to be completed by Readline.",
+    },
+    BuiltinHelp {
+        name: "dirs",
+        synopsis: "dirs [-clpv] [+N] [-N]",
+        description: "Display directory stack.",
+    },
+    BuiltinHelp {
+        name: "disown",
+        synopsis: "disown [-h] [-ar] [jobspec ... | pid ...]",
+        description: "Remove jobs from current shell.",
+    },
+    BuiltinHelp {
+        name: "enable",
+        synopsis: "enable [-a] [-dnps] [-f filename] [name ...]",
+        description: "Enable and disable shell builtins.",
+    },
+    BuiltinHelp {
+        name: "exec",
+        synopsis: "exec [-cl] [-a name] [command [arguments ...]] [redirection ...]",
+        description: "Replace the shell with the given command.",
+    },
+    BuiltinHelp {
+        name: "fc",
+        synopsis: "fc [-e ename] [-lnr] [first] [last] or fc -s [pat=rep] [command]",
+        description: "Display or execute commands from the history list.",
+    },
+    BuiltinHelp {
+        name: "fg",
+        synopsis: "fg [job_spec]",
+        description: "Move job to the foreground.",
+    },
+    BuiltinHelp {
+        name: "history",
+        synopsis: "history [-c] [-d offset] [n] or history -anrw [filename] or history -ps arg [arg...]",
+        description: "Display or manipulate the history list.",
+    },
+    BuiltinHelp {
+        name: "jobs",
+        synopsis: "jobs [-lnprs] [jobspec ...] or jobs -x command [args]",
+        description: "Display status of jobs.",
+    },
+    BuiltinHelp {
+        name: "kill",
+        synopsis: "kill [-s sigspec | -n signum | -sigspec] pid | jobspec ... or kill -l [sigspec]",
+        description: "Send a signal to a job.",
+    },
+    BuiltinHelp {
+        name: "logout",
+        synopsis: "logout [n]",
+        description: "Exit a login shell.",
+    },
+    BuiltinHelp {
+        name: "popd",
+        synopsis: "popd [-n] [+N | -N]",
+        description: "Remove directories from stack.",
+    },
+    BuiltinHelp {
+        name: "pushd",
+        synopsis: "pushd [-n] [+N | -N | dir]",
+        description: "Add directories to stack.",
+    },
+    BuiltinHelp {
+        name: "readarray",
+        synopsis: "readarray [-d delim] [-n count] [-O origin] [-s count] [-t] [-u fd] [-C callback] [-c quantum] [array]",
+        description: "Read lines from a file into an array variable.",
+    },
+    BuiltinHelp {
+        name: "suspend",
+        synopsis: "suspend [-f]",
+        description: "Suspend shell execution.",
+    },
+    BuiltinHelp {
+        name: "times",
+        synopsis: "times",
+        description: "Display process times.",
+    },
+    BuiltinHelp {
+        name: "trap",
+        synopsis: "trap [-lp] [[arg] signal_spec ...]",
+        description: "Trap signals and other events.",
+    },
+    BuiltinHelp {
+        name: "typeset",
+        synopsis: "typeset [-aAfFgilnrtux] [-p] name[=value] ...",
+        description: "Set variable values and attributes.",
+    },
+    BuiltinHelp {
+        name: "ulimit",
+        synopsis: "ulimit [-SHabcdefiklmnpqrstuvxPT] [limit]",
+        description: "Modify shell resource limits.",
+    },
+    BuiltinHelp {
+        name: "umask",
+        synopsis: "umask [-p] [-S] [mode]",
+        description: "Display or set file mode mask.",
+    },
+    BuiltinHelp {
+        name: "unalias",
+        synopsis: "unalias [-a] name [name ...]",
+        description: "Remove each NAME from the list of defined aliases.",
+    },
 ];
 
 /// Get all builtin names sorted
@@ -404,5 +529,28 @@ mod tests {
         assert!(glob_match("*", "anything"));
         assert!(!glob_match("echo", "eval"));
         assert!(!glob_match("e?o", "echo"));
+    }
+
+    #[test]
+    fn test_help_common_builtins() {
+        let result = handle_help(&[]);
+        assert!(result.stdout.contains("cd"));
+        assert!(result.stdout.contains("export"));
+        assert!(result.stdout.contains("echo"));
+    }
+
+    #[test]
+    fn test_help_cd() {
+        let result = handle_help(&["cd".to_string()]);
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("cd:"));
+        assert!(result.stdout.to_lowercase().contains("change"));
+    }
+
+    #[test]
+    fn test_help_double_dash() {
+        let result = handle_help(&["--".to_string(), "help".to_string()]);
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("help"));
     }
 }

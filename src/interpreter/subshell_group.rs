@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use crate::interpreter::types::{ExecResult, InterpreterState, LocalVarStackEntry, ShellOptions};
+use crate::interpreter::errors::{InterpreterError, ControlFlowError};
 
 /// Saved state for subshell execution.
 /// Used to restore the parent environment after subshell completes.
@@ -274,6 +275,194 @@ impl CompoundResult {
     }
 }
 
+/// Execute a subshell node (...).
+/// Creates an isolated execution environment that doesn't affect the parent.
+pub fn execute_subshell<F>(
+    state: &mut InterpreterState,
+    body: &[crate::StatementNode],
+    stdin: Option<&str>,
+    mut execute_statement: F,
+) -> Result<ExecResult, InterpreterError>
+where
+    F: FnMut(&crate::StatementNode) -> Result<ExecResult, InterpreterError>,
+{
+    let saved = prepare_subshell(state, stdin);
+
+    let mut result = CompoundResult::new();
+
+    for stmt in body {
+        match execute_statement(stmt) {
+            Ok(res) => result.append(&res),
+            Err(InterpreterError::ExecutionLimit(e)) => {
+                // ExecutionLimitError must always propagate - these are safety limits
+                saved.restore(state);
+                return Err(InterpreterError::ExecutionLimit(e));
+            }
+            Err(InterpreterError::SubshellExit(e)) => {
+                // SubshellExitError means break/continue was called when parent had loop context
+                // This exits the subshell cleanly with exit code 0
+                result.stdout.push_str(&e.stdout);
+                result.stderr.push_str(&e.stderr);
+                saved.restore(state);
+                return Ok(result.to_exec_result());
+            }
+            Err(InterpreterError::Break(e)) => {
+                // BreakError should NOT propagate out of subshell
+                // They only affect loops within the subshell
+                result.stdout.push_str(&e.stdout);
+                result.stderr.push_str(&e.stderr);
+                saved.restore(state);
+                return Ok(result.to_exec_result());
+            }
+            Err(InterpreterError::Continue(e)) => {
+                // ContinueError should NOT propagate out of subshell
+                result.stdout.push_str(&e.stdout);
+                result.stderr.push_str(&e.stderr);
+                saved.restore(state);
+                return Ok(result.to_exec_result());
+            }
+            Err(InterpreterError::Exit(e)) => {
+                // ExitError in subshell should NOT propagate - just return the exit code
+                // (subshells are like separate processes)
+                result.stdout.push_str(&e.stdout);
+                result.stderr.push_str(&e.stderr);
+                result.exit_code = e.exit_code;
+                saved.restore(state);
+                return Ok(result.to_exec_result());
+            }
+            Err(InterpreterError::Return(e)) => {
+                // ReturnError in subshell (e.g., f() ( return 42; )) should also just exit
+                // with the given code, since subshells are like separate processes
+                result.stdout.push_str(&e.stdout);
+                result.stderr.push_str(&e.stderr);
+                result.exit_code = e.exit_code;
+                saved.restore(state);
+                return Ok(result.to_exec_result());
+            }
+            Err(InterpreterError::Errexit(e)) => {
+                // Errexit in subshell - return with the exit code
+                result.stdout.push_str(&e.stdout);
+                result.stderr.push_str(&e.stderr);
+                result.exit_code = e.exit_code;
+                saved.restore(state);
+                return Ok(result.to_exec_result());
+            }
+            Err(e) => {
+                // Other errors - convert to result with error message
+                result.stderr.push_str(&format!("{}\n", e));
+                result.exit_code = 1;
+                saved.restore(state);
+                return Ok(result.to_exec_result());
+            }
+        }
+    }
+
+    saved.restore(state);
+    Ok(result.to_exec_result())
+}
+
+/// Execute a group node { ...; }.
+/// Runs commands in the current execution environment.
+pub fn execute_group<F>(
+    state: &mut InterpreterState,
+    body: &[crate::StatementNode],
+    stdin: Option<&str>,
+    mut execute_statement: F,
+) -> Result<ExecResult, InterpreterError>
+where
+    F: FnMut(&crate::StatementNode) -> Result<ExecResult, InterpreterError>,
+{
+    let saved = prepare_group(state, stdin);
+
+    let mut result = CompoundResult::new();
+
+    for stmt in body {
+        match execute_statement(stmt) {
+            Ok(res) => result.append(&res),
+            Err(InterpreterError::ExecutionLimit(e)) => {
+                // ExecutionLimitError must always propagate - these are safety limits
+                saved.restore(state);
+                return Err(InterpreterError::ExecutionLimit(e));
+            }
+            Err(InterpreterError::Break(mut e)) => {
+                // Groups propagate errors with prepended output
+                e.prepend_output(&result.stdout, &result.stderr);
+                saved.restore(state);
+                return Err(InterpreterError::Break(e));
+            }
+            Err(InterpreterError::Continue(mut e)) => {
+                e.prepend_output(&result.stdout, &result.stderr);
+                saved.restore(state);
+                return Err(InterpreterError::Continue(e));
+            }
+            Err(InterpreterError::Return(mut e)) => {
+                e.prepend_output(&result.stdout, &result.stderr);
+                saved.restore(state);
+                return Err(InterpreterError::Return(e));
+            }
+            Err(InterpreterError::Errexit(mut e)) => {
+                e.prepend_output(&result.stdout, &result.stderr);
+                saved.restore(state);
+                return Err(InterpreterError::Errexit(e));
+            }
+            Err(InterpreterError::Exit(mut e)) => {
+                e.prepend_output(&result.stdout, &result.stderr);
+                saved.restore(state);
+                return Err(InterpreterError::Exit(e));
+            }
+            Err(e) => {
+                // Other errors - convert to result with error message
+                result.stderr.push_str(&format!("{}\n", e));
+                result.exit_code = 1;
+                saved.restore(state);
+                return Ok(result.to_exec_result());
+            }
+        }
+    }
+
+    saved.restore(state);
+    Ok(result.to_exec_result())
+}
+
+/// Execute a user script file.
+pub fn execute_user_script<F>(
+    state: &mut InterpreterState,
+    script_path: &str,
+    content: &str,
+    args: &[String],
+    stdin: Option<&str>,
+    execute_script: F,
+) -> Result<ExecResult, InterpreterError>
+where
+    F: FnOnce(&mut InterpreterState) -> Result<ExecResult, InterpreterError>,
+{
+    // Skip shebang if present
+    let _script_content = skip_shebang(content);
+
+    let saved = prepare_script(state, script_path, args, stdin);
+
+    let result = match execute_script(state) {
+        Ok(res) => res,
+        Err(InterpreterError::Exit(e)) => {
+            // ExitError propagates up (but with output from this script)
+            saved.restore(state);
+            return Err(InterpreterError::Exit(e));
+        }
+        Err(InterpreterError::ExecutionLimit(e)) => {
+            // ExecutionLimitError must always propagate
+            saved.restore(state);
+            return Err(InterpreterError::ExecutionLimit(e));
+        }
+        Err(e) => {
+            saved.restore(state);
+            return Err(e);
+        }
+    };
+
+    saved.restore(state);
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -372,5 +561,76 @@ mod tests {
         assert_eq!(result.stdout, "out1out2");
         assert_eq!(result.stderr, "err1err2");
         assert_eq!(result.exit_code, 1);
+    }
+
+    #[test]
+    fn test_subshell_variable_isolation() {
+        let mut state = make_state();
+        state.env.insert("FOO".to_string(), "original".to_string());
+
+        let saved = prepare_subshell(&mut state, None);
+
+        // Modify in subshell
+        state.env.insert("FOO".to_string(), "modified".to_string());
+        state.env.insert("NEW".to_string(), "value".to_string());
+
+        // Restore
+        saved.restore(&mut state);
+
+        // Parent should be unchanged
+        assert_eq!(state.env.get("FOO"), Some(&"original".to_string()));
+        assert!(state.env.get("NEW").is_none());
+    }
+
+    #[test]
+    fn test_execute_subshell_basic() {
+        let mut state = make_state();
+
+        // Execute subshell with a simple callback that returns success
+        let result = execute_subshell(&mut state, &[], None, |_stmt| {
+            Ok(ExecResult {
+                stdout: "hello".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+                env: None,
+            })
+        });
+
+        assert!(result.is_ok());
+        let res = result.unwrap();
+        assert_eq!(res.exit_code, 0);
+    }
+
+    #[test]
+    fn test_execute_group_basic() {
+        let mut state = make_state();
+
+        // Execute group with a simple callback that returns success
+        let result = execute_group(&mut state, &[], None, |_stmt| {
+            Ok(ExecResult {
+                stdout: "hello".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+                env: None,
+            })
+        });
+
+        assert!(result.is_ok());
+        let res = result.unwrap();
+        assert_eq!(res.exit_code, 0);
+    }
+
+    #[test]
+    fn test_group_stdin_handling() {
+        let mut state = make_state();
+        state.group_stdin = Some("original_stdin".to_string());
+
+        let saved = prepare_group(&mut state, Some("new_stdin"));
+
+        assert_eq!(state.group_stdin, Some("new_stdin".to_string()));
+
+        saved.restore(&mut state);
+
+        assert_eq!(state.group_stdin, Some("original_stdin".to_string()));
     }
 }

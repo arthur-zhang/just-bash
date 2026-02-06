@@ -6,6 +6,7 @@ pub mod cp;
 pub mod dirname;
 pub mod grep;
 pub mod head;
+pub mod join;
 pub mod ls;
 pub mod mkdir;
 pub mod mv;

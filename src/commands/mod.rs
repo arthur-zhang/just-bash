@@ -10,6 +10,7 @@ pub mod ls;
 pub mod mkdir;
 pub mod mv;
 pub mod nl;
+pub mod paste;
 pub mod registry;
 pub mod rm;
 pub mod tail;

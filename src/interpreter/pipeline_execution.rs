@@ -3,11 +3,46 @@
 //! Handles execution of command pipelines (cmd1 | cmd2 | cmd3).
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 use crate::interpreter::types::ExecResult;
+use crate::interpreter::errors::InterpreterError;
+use crate::ast::types::CommandNode;
 
-/// Result of executing a pipeline.
+/// Options for pipeline execution.
+#[derive(Debug, Clone, Default)]
+pub struct PipelineOptions {
+    pub pipefail: bool,
+    pub lastpipe: bool,
+    pub runs_in_subshell: bool,
+    pub time_pipeline: bool,
+    pub time_posix_format: bool,
+}
+
+/// Result of pipeline execution.
 #[derive(Debug, Clone)]
 pub struct PipelineResult {
+    pub exit_codes: Vec<i32>,
+    pub final_exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+    pub elapsed_time: Option<Duration>,
+}
+
+impl PipelineResult {
+    /// Convert to an ExecResult.
+    pub fn to_exec_result(&self) -> ExecResult {
+        ExecResult {
+            stdout: self.stdout.clone(),
+            stderr: self.stderr.clone(),
+            exit_code: self.final_exit_code,
+            env: None,
+        }
+    }
+}
+
+/// Legacy result of executing a pipeline (kept for backward compatibility).
+#[derive(Debug, Clone)]
+pub struct LegacyPipelineResult {
     pub stdout: String,
     pub stderr: String,
     pub exit_code: i32,
@@ -15,7 +50,7 @@ pub struct PipelineResult {
     pub pipestatus: Vec<i32>,
 }
 
-impl PipelineResult {
+impl LegacyPipelineResult {
     /// Create a new pipeline result.
     pub fn new(stdout: String, stderr: String, exit_code: i32) -> Self {
         Self {
@@ -206,13 +241,98 @@ pub fn should_set_pipestatus(command_count: usize, is_simple_command: bool) -> b
     command_count > 1 || (command_count == 1 && is_simple_command)
 }
 
+/// Calculate exit code based on pipefail option.
+pub fn calculate_pipefail_exit_code(exit_codes: &[i32], pipefail: bool) -> i32 {
+    if pipefail {
+        // Return the rightmost non-zero exit code, or 0 if all succeeded
+        exit_codes.iter().filter(|&&c| c != 0).last().copied().unwrap_or(0)
+    } else {
+        // Return the last command's exit code
+        exit_codes.last().copied().unwrap_or(0)
+    }
+}
+
+/// Execute a pipeline of commands.
+pub fn execute_pipeline<F>(
+    state: &mut PipelineState,
+    commands: &[CommandNode],
+    pipe_stderr: &[bool],
+    options: &PipelineOptions,
+    mut execute_command: F,
+) -> Result<PipelineResult, InterpreterError>
+where
+    F: FnMut(&CommandNode, &str) -> Result<ExecResult, InterpreterError>,
+{
+    let start_time = if options.time_pipeline {
+        Some(Instant::now())
+    } else {
+        None
+    };
+
+    let command_count = commands.len();
+    let mut exit_codes = Vec::with_capacity(command_count);
+    let mut final_stdout = String::new();
+    let mut final_stderr = String::new();
+
+    for (i, command) in commands.iter().enumerate() {
+        let is_last = i == command_count - 1;
+        let current_stdin = std::mem::take(&mut state.stdin);
+
+        // Execute the command with current stdin
+        let result = execute_command(command, &current_stdin)?;
+
+        // Track exit code
+        exit_codes.push(result.exit_code);
+
+        // Determine if we should pipe stderr for this command
+        let should_pipe_stderr = pipe_stderr.get(i).copied().unwrap_or(false);
+
+        if !is_last {
+            // Pipe output to next command
+            if should_pipe_stderr {
+                // |& pipes both stdout and stderr to next command's stdin
+                state.stdin = format!("{}{}", result.stderr, result.stdout);
+            } else {
+                // Regular | only pipes stdout
+                state.stdin = result.stdout;
+                // Accumulate stderr from non-last commands
+                final_stderr.push_str(&result.stderr);
+            }
+        } else {
+            // Last command - capture its output
+            final_stdout = result.stdout;
+            final_stderr.push_str(&result.stderr);
+        }
+    }
+
+    // Calculate final exit code based on pipefail option
+    let final_exit_code = calculate_pipefail_exit_code(&exit_codes, options.pipefail);
+
+    // Calculate elapsed time if timing was requested
+    let elapsed_time = start_time.map(|t| t.elapsed());
+
+    // Append timing output to stderr if timing was requested
+    if let Some(elapsed) = elapsed_time {
+        let timing_output = format_timing_output(elapsed.as_secs_f64(), options.time_posix_format);
+        final_stderr.push_str(&timing_output);
+    }
+
+    Ok(PipelineResult {
+        exit_codes,
+        final_exit_code,
+        stdout: final_stdout,
+        stderr: final_stderr,
+        elapsed_time,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_pipeline_result_new() {
-        let result = PipelineResult::new("out".to_string(), "err".to_string(), 0);
+    fn test_legacy_pipeline_result_new() {
+        let result = LegacyPipelineResult::new("out".to_string(), "err".to_string(), 0);
         assert_eq!(result.stdout, "out");
         assert_eq!(result.stderr, "err");
         assert_eq!(result.exit_code, 0);
@@ -220,13 +340,41 @@ mod tests {
     }
 
     #[test]
-    fn test_pipeline_result_negate() {
-        let mut result = PipelineResult::new(String::new(), String::new(), 0);
+    fn test_legacy_pipeline_result_negate() {
+        let mut result = LegacyPipelineResult::new(String::new(), String::new(), 0);
         result.negate();
         assert_eq!(result.exit_code, 1);
 
         result.negate();
         assert_eq!(result.exit_code, 0);
+    }
+
+    #[test]
+    fn test_pipefail_rightmost_failure() {
+        let exit_codes = vec![0, 1, 0, 2, 0];
+        let result = calculate_pipefail_exit_code(&exit_codes, true);
+        assert_eq!(result, 2);
+    }
+
+    #[test]
+    fn test_without_pipefail() {
+        let exit_codes = vec![1, 2, 0];
+        let result = calculate_pipefail_exit_code(&exit_codes, false);
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn test_pipefail_all_success() {
+        let exit_codes = vec![0, 0, 0];
+        let result = calculate_pipefail_exit_code(&exit_codes, true);
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn test_pipefail_single_failure() {
+        let exit_codes = vec![0, 5, 0];
+        let result = calculate_pipefail_exit_code(&exit_codes, true);
+        assert_eq!(result, 5);
     }
 
     #[test]

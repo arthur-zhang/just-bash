@@ -1,4 +1,5 @@
 // src/commands/awk/mod.rs
+pub mod builtins;
 pub mod coercion;
 pub mod context;
 pub mod fields;

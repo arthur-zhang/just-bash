@@ -4,6 +4,7 @@
 
 pub mod ast;
 pub mod bash;
+pub mod commands;
 pub mod fs;
 pub mod interpreter;
 pub mod parser;
@@ -12,3 +13,4 @@ pub use ast::types::*;
 pub use parser::{parse, Parser, ParseException};
 pub use bash::Bash;
 pub use fs::{FileSystem, InMemoryFs};
+pub use commands::{Command, CommandContext, CommandResult};

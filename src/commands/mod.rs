@@ -25,6 +25,7 @@ pub mod wc;
 pub mod uniq;
 pub mod types;
 pub mod utils;
+pub mod query_engine;
 
 pub use registry::{CommandRegistry, register_batch_a, register_batch_b, create_batch_a_registry, create_batch_ab_registry};
 pub use types::{Command, CommandContext, CommandResult};

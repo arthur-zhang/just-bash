@@ -64,6 +64,7 @@ use super::awk::AwkCommand;
 
 // Batch C imports
 use super::jq::JqCommand;
+use super::yq::YqCommand;
 
 /// 注册批次 A 的所有命令
 pub fn register_batch_a(registry: &mut CommandRegistry) {
@@ -115,6 +116,7 @@ pub fn create_batch_ab_registry() -> CommandRegistry {
 /// 注册批次 C 的所有命令
 pub fn register_batch_c(registry: &mut CommandRegistry) {
     registry.register(Box::new(JqCommand));
+    registry.register(Box::new(YqCommand));
 }
 
 /// 创建包含批次 A、B 和 C 命令的注册表

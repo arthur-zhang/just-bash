@@ -62,6 +62,9 @@ use super::sort::SortCommand;
 use super::sed::SedCommand;
 use super::awk::AwkCommand;
 
+// Batch C imports
+use super::jq::JqCommand;
+
 /// 注册批次 A 的所有命令
 pub fn register_batch_a(registry: &mut CommandRegistry) {
     registry.register(Box::new(BasenameCommand));
@@ -106,5 +109,19 @@ pub fn create_batch_ab_registry() -> CommandRegistry {
     let mut registry = CommandRegistry::new();
     register_batch_a(&mut registry);
     register_batch_b(&mut registry);
+    registry
+}
+
+/// 注册批次 C 的所有命令
+pub fn register_batch_c(registry: &mut CommandRegistry) {
+    registry.register(Box::new(JqCommand));
+}
+
+/// 创建包含批次 A、B 和 C 命令的注册表
+pub fn create_batch_abc_registry() -> CommandRegistry {
+    let mut registry = CommandRegistry::new();
+    register_batch_a(&mut registry);
+    register_batch_b(&mut registry);
+    register_batch_c(&mut registry);
     registry
 }

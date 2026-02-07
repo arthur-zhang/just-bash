@@ -7,6 +7,7 @@ pub mod cp;
 pub mod dirname;
 pub mod grep;
 pub mod head;
+pub mod jq;
 pub mod join;
 pub mod ls;
 pub mod mkdir;
@@ -27,5 +28,5 @@ pub mod types;
 pub mod utils;
 pub mod query_engine;
 
-pub use registry::{CommandRegistry, register_batch_a, register_batch_b, create_batch_a_registry, create_batch_ab_registry};
+pub use registry::{CommandRegistry, register_batch_a, register_batch_b, register_batch_c, create_batch_a_registry, create_batch_ab_registry, create_batch_abc_registry};
 pub use types::{Command, CommandContext, CommandResult};

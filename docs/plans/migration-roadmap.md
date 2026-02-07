@@ -102,7 +102,7 @@
 | join | ~250 | ✅ 已实现 | 连接行，支持 -1/-2/-t/-a/-v/-e/-o/-i |
 | sort | ~350 | ✅ 已实现 | 排序，支持 -r/-n/-u/-f/-k/-t/-c/-h/-V/-M |
 | sed | ~1,500 | ✅ 已实现 | 流编辑器，支持 s/d/p/a/i/c/h/H/g/G/x/n/N/y/=/l/b/t/T/q/Q/z/P/D/r/w |
-| awk | ~2000+ | ⏳ 待实现 | AWK 解释器（复杂，单独迁移） |
+| awk | ~5,000 | ✅ 已实现 | AWK 解释器（12 模块：types/coercion/lexer/parser/context/fields/variables/builtins/expressions/statements/interpreter/mod） |
 
 **批次 B 实现统计**:
 - 新增文件: 9 个（含 sort/comparator.rs）
@@ -120,6 +120,17 @@
 - 新增代码: ~3,500 行
 - 新增测试: 115 个（10 regex + 14 lexer + 13 parser + 33 executor + 45 integration）
 - 总测试数: 1,034 个（全部通过）
+
+#### 批次 B 补充 - awk ✅ 完成于 2026-02-06
+| 命令 | 行数 | 状态 | 说明 |
+|------|------|------|------|
+| awk | ~5,000 | ✅ 已实现 | AWK 解释器（12 模块：types/coercion/lexer/parser/context/fields/variables/builtins/expressions/statements/interpreter/mod） |
+
+**awk 实现统计**:
+- 新增文件: 12 个
+- 新增代码: ~5,000 行
+- 新增测试: 346 个（31 coercion + 20 lexer + 29 parser + 10 context + 16 fields + 12 variables + 45 builtins + 57 expressions + 26 statements + 18 interpreter + 60 integration + 22 misc）
+- 总测试数: 1,380 个（全部通过）
 
 #### 批次 C - 数据格式
 | 命令 | 行数 | 说明 |
@@ -178,7 +189,7 @@
   - [x] 批次 A - 基础命令 ✅ 834 个测试
   - [x] 批次 B - 文本处理 ✅ 919 个测试
   - [x] 批次 B 补充 - sed ✅ 1,034 个测试
-  - [ ] 批次 B 补充 - awk
+  - [x] 批次 B 补充 - awk ✅ 1,380 个测试
   - [ ] 批次 C - 数据格式
   - [ ] 批次 D - 其他
 - [ ] 第三阶段 - 辅助模块
@@ -199,4 +210,5 @@
 | commands (batch A) | 74 | ✅ |
 | commands (batch B) | 85 | ✅ |
 | commands (sed) | 115 | ✅ |
-| **总计** | **1,034** | ✅ |
+| commands (awk) | 346 | ✅ |
+| **总计** | **1,380** | ✅ |

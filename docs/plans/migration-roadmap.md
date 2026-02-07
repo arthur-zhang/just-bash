@@ -132,11 +132,18 @@
 - 新增测试: 346 个（31 coercion + 20 lexer + 29 parser + 10 context + 16 fields + 12 variables + 45 builtins + 57 expressions + 26 statements + 18 interpreter + 60 integration + 22 misc）
 - 总测试数: 1,380 个（全部通过）
 
-#### 批次 C - 数据格式
-| 命令 | 行数 | 说明 |
-|------|------|------|
-| jq | ~348 | JSON 处理 |
-| yq | ~500+ | YAML/TOML/XML |
+#### 批次 C - 数据格式 ✅ 完成于 2026-02-07
+| 命令 | 行数 | 状态 | 说明 |
+|------|------|------|------|
+| jq | ~960 | ✅ 已实现 | JSON 处理（共享 query-engine） |
+| yq | ~2,036 | ✅ 已实现 | YAML/JSON/XML/INI/CSV/TOML 处理（formats.rs + mod.rs） |
+| query-engine | ~8,276 | ✅ 已实现 | 共享查询引擎（8 模块：value/ast/lexer/parser/evaluator/context/operations/mod） |
+
+**批次 C 实现统计**:
+- 新增文件: 11 个（query_engine: 8, jq: 1, yq: 2）
+- 新增代码: ~11,272 行
+- 新增测试: 239 个（25 operations + 31 lexer + 36 parser + 73 evaluator + 35 jq + 17 yq-formats + 22 yq-command）
+- 总测试数: 1,619 个（全部通过）
 
 #### 批次 D - 其他
 | 命令 | 行数 | 说明 |
@@ -190,7 +197,7 @@
   - [x] 批次 B - 文本处理 ✅ 919 个测试
   - [x] 批次 B 补充 - sed ✅ 1,034 个测试
   - [x] 批次 B 补充 - awk ✅ 1,380 个测试
-  - [ ] 批次 C - 数据格式
+  - [x] 批次 C - 数据格式 ✅ 1,619 个测试
   - [ ] 批次 D - 其他
 - [ ] 第三阶段 - 辅助模块
 - [ ] 第四阶段 - 接口层
@@ -211,4 +218,5 @@
 | commands (batch B) | 85 | ✅ |
 | commands (sed) | 115 | ✅ |
 | commands (awk) | 346 | ✅ |
-| **总计** | **1,380** | ✅ |
+| commands (batch C: jq/yq) | 239 | ✅ |
+| **总计** | **1,619** | ✅ |

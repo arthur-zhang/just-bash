@@ -1,4 +1,5 @@
 // src/commands/mod.rs
+pub mod awk;
 pub mod basename;
 pub mod cat;
 pub mod cut;

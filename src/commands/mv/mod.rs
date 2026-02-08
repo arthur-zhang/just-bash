@@ -121,6 +121,8 @@ mod tests {
             cwd: "/".to_string(),
             env: HashMap::new(),
             fs,
+            exec_fn: None,
+            fetch_fn: None,
         }
     }
 
@@ -149,6 +151,8 @@ mod tests {
             cwd: "/".to_string(),
             env: HashMap::new(),
             fs: fs.clone(),
+            exec_fn: None,
+            fetch_fn: None,
         };
         let cmd = MvCommand;
         let result = cmd.execute(ctx).await;

@@ -576,6 +576,8 @@ mod tests {
             cwd: "/".to_string(),
             env: HashMap::new(),
             fs: Arc::new(InMemoryFs::new()),
+            exec_fn: None,
+            fetch_fn: None,
         }
     }
 
@@ -594,6 +596,8 @@ mod tests {
             cwd: "/".to_string(),
             env: HashMap::new(),
             fs,
+            exec_fn: None,
+            fetch_fn: None,
         }
     }
 

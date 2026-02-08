@@ -57,6 +57,8 @@ mod tests {
             cwd: "/".to_string(),
             env: HashMap::new(),
             fs,
+            exec_fn: None,
+            fetch_fn: None,
         }
     }
 

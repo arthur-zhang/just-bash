@@ -197,17 +197,34 @@
 
 ---
 
-### 第四阶段：接口层
+### 第四阶段：接口层 ✅ 完成
 
-#### 4.1 cli/ - 命令行接口
-- 脚本执行
-- 交互式 shell
-- 安全选项
+#### 4.1 sandbox/ - Vercel 兼容 API ✅ 完成于 2026-02-09
+| 模块 | 行数 | 状态 | 说明 |
+|------|------|------|------|
+| types | ~120 | ✅ 已实现 | SandboxOptions、SandboxCommand、RunCommandOptions、FileContent、FileEncoding、OutputMessage |
+| sandbox | ~155 | ✅ 已实现 | Sandbox::create()、run_command()、write_files()、read_file()、mkdir()、get_cwd() |
 
-#### 4.2 sandbox/ - Vercel 兼容 API
-- `runCommand()`
-- `writeFiles()`
-- `readFile()`
+**sandbox 实现统计**:
+- 新增文件: 3 个（mod.rs, types.rs, sandbox.rs）
+- 新增代码: ~275 行
+- 新增测试: 23 个（8 types + 15 sandbox）
+
+#### 4.2 cli/ - 命令行接口 ✅ 完成于 2026-02-09
+| 模块 | 行数 | 状态 | 说明 |
+|------|------|------|------|
+| main.rs | ~75 | ✅ 已实现 | clap CLI：-c script、script file、stdin、--json、-e/--errexit、--cwd |
+
+**cli 实现统计**:
+- 修改文件: 1 个（main.rs）
+- 新增代码: ~75 行
+- 功能: 脚本执行（-c/file/stdin）、JSON 输出、errexit 模式
+
+**第四阶段总计**:
+- 新增/修改文件: 4 个
+- 新增代码: ~350 行
+- 新增测试: 23 个
+- 总测试数: 2,050 个（全部通过）
 
 ---
 
@@ -228,7 +245,9 @@
 - [x] 第三阶段 - 辅助模块 ✅ 2,027 个测试
   - [x] shell/glob - Glob 模式匹配 ✅ 101 个测试
   - [x] network/ - 网络访问控制 ✅ 38 个测试
-- [ ] 第四阶段 - 接口层
+- [x] 第四阶段 - 接口层 ✅ 2,050 个测试
+  - [x] sandbox/ - Vercel 兼容 API ✅ 23 个测试
+  - [x] cli/ - 命令行接口 ✅
 
 ---
 
@@ -253,4 +272,6 @@
 | network/types | 6 | ✅ |
 | network/allow_list | 18 | ✅ |
 | network/fetch | 14 | ✅ |
-| **总计** | **2,027** | ✅ |
+| sandbox/types | 8 | ✅ |
+| sandbox/sandbox | 15 | ✅ |
+| **总计** | **2,050** | ✅ |

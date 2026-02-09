@@ -7,6 +7,7 @@ pub mod bash;
 pub mod commands;
 pub mod fs;
 pub mod interpreter;
+pub mod network;
 pub mod parser;
 pub mod shell;
 

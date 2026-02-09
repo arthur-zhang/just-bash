@@ -8,6 +8,7 @@ pub mod commands;
 pub mod fs;
 pub mod interpreter;
 pub mod parser;
+pub mod shell;
 
 pub use ast::types::*;
 pub use parser::{parse, Parser, ParseException};

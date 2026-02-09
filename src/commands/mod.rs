@@ -29,6 +29,7 @@ pub mod touch;
 pub mod tr;
 pub mod wc;
 pub mod uniq;
+pub mod xargs;
 pub mod types;
 pub mod utils;
 pub mod query_engine;

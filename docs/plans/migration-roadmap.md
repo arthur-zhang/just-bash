@@ -23,8 +23,8 @@
 | ~~**filesystem/**~~ | ~~18~~ | ~~7,550~~ | ✅ 完成 | 虚拟文件系统抽象层 |
 | **commands/** | 364 | 97,146 | 🔴 高 | 70+ Unix 命令实现 |
 | ~~**Bash.ts**~~ | ~~1~~ | ~~~20,000~~ | ✅ 完成 | 主环境类，整合所有模块 |
-| **shell/** (glob) | 2 | 1,387 | 🟡 中 | glob 模式匹配 |
-| **network/** | 9 | 2,629 | 🟡 中 | 安全网络访问 |
+| **shell/** (glob) | 2 | 1,387 | ✅ 完成 | glob 模式匹配 |
+| **network/** | 9 | 2,629 | ✅ 完成 | 安全网络访问 |
 | **sandbox/** | 4 | 642 | 🟢 低 | Vercel 兼容 API |
 | **cli/** | 6 | 1,367 | 🟢 低 | 命令行接口 |
 | **测试代码** | ~70 | ~16,000 | 🟢 低 | 各类测试 |
@@ -164,16 +164,36 @@
 
 ---
 
-### 第三阶段：辅助模块
+### 第三阶段：辅助模块 ✅ 完成
 
-#### 3.1 shell/glob - Glob 模式匹配
-- `glob.ts` (1,043 行)
-- `glob-to-regex.ts` (344 行)
+#### 3.1 shell/glob - Glob 模式匹配 ✅ 完成于 2026-02-09
+| 模块 | 行数 | 状态 | 说明 |
+|------|------|------|------|
+| glob_helpers | ~711 | ✅ 已实现 | GLOBIGNORE 分割、glob-to-regex、globignore-to-regex、POSIX 字符类 |
+| glob_expander | ~1,085 | ✅ 已实现 | GlobExpander 异步虚拟 FS glob 展开（simple/recursive/**、dotglob/extglob/nullglob/failglob/globskipdots/GLOBIGNORE） |
 
-#### 3.2 network/ - 网络访问控制
-- URL 白名单验证
-- 安全 fetch 包装
-- 重定向处理
+**shell/glob 实现统计**:
+- 新增文件: 3 个（mod.rs, glob_helpers.rs, glob_expander.rs）
+- 新增代码: ~1,796 行
+- 新增测试: 101 个（42 glob_helpers + 59 glob_expander）
+
+#### 3.2 network/ - 网络访问控制 ✅ 完成于 2026-02-09
+| 模块 | 行数 | 状态 | 说明 |
+|------|------|------|------|
+| types | ~120 | ✅ 已实现 | HttpMethod、NetworkConfig、FetchResult、NetworkError |
+| allow_list | ~265 | ✅ 已实现 | URL 解析、白名单匹配、配置验证 |
+| fetch | ~378 | ✅ 已实现 | 安全 fetch 包装器（allow-list 强制、重定向处理、方法检查） |
+
+**network 实现统计**:
+- 新增文件: 4 个（mod.rs, types.rs, allow_list.rs, fetch.rs）
+- 新增代码: ~763 行
+- 新增测试: 38 个（6 types + 18 allow_list + 14 fetch）
+
+**第三阶段总计**:
+- 新增文件: 7 个
+- 新增代码: ~2,559 行
+- 新增测试: 139 个
+- 总测试数: 2,027 个（全部通过）
 
 ---
 
@@ -205,7 +225,9 @@
   - [x] 批次 B 补充 - awk ✅ 1,380 个测试
   - [x] 批次 C - 数据格式 ✅ 1,619 个测试
   - [x] 批次 D - 其他 ✅ 1,888 个测试
-- [ ] 第三阶段 - 辅助模块
+- [x] 第三阶段 - 辅助模块 ✅ 2,027 个测试
+  - [x] shell/glob - Glob 模式匹配 ✅ 101 个测试
+  - [x] network/ - 网络访问控制 ✅ 38 个测试
 - [ ] 第四阶段 - 接口层
 
 ---
@@ -226,4 +248,9 @@
 | commands (awk) | 346 | ✅ |
 | commands (batch C: jq/yq) | 239 | ✅ |
 | commands (batch D) | 269 | ✅ |
-| **总计** | **1,888** | ✅ |
+| shell/glob_helpers | 42 | ✅ |
+| shell/glob_expander | 59 | ✅ |
+| network/types | 6 | ✅ |
+| network/allow_list | 18 | ✅ |
+| network/fetch | 14 | ✅ |
+| **总计** | **2,027** | ✅ |

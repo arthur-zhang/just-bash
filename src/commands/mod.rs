@@ -5,6 +5,7 @@ pub mod basename;
 pub mod cat;
 pub mod cut;
 pub mod cp;
+pub mod curl;
 pub mod diff_cmd;
 pub mod dirname;
 pub mod find;

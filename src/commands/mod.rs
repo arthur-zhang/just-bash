@@ -8,6 +8,7 @@ pub mod cp;
 pub mod diff_cmd;
 pub mod dirname;
 pub mod grep;
+pub mod gzip;
 pub mod head;
 pub mod jq;
 pub mod join;

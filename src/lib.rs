@@ -17,3 +17,4 @@ pub use parser::{parse, Parser, ParseException};
 pub use bash::Bash;
 pub use fs::{FileSystem, InMemoryFs};
 pub use commands::{Command, CommandContext, CommandResult};
+pub use sandbox::Sandbox;

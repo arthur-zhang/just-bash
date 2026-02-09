@@ -23,6 +23,7 @@ pub mod rm;
 pub mod sed;
 pub mod sort;
 pub mod tail;
+pub mod tar;
 pub mod test_cmd;
 pub mod touch;
 pub mod tr;

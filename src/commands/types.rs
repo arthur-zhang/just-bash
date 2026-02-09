@@ -1,8 +1,29 @@
 // src/commands/types.rs
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use crate::fs::FileSystem;
+
+/// Callback for executing shell commands (used by xargs, find -exec)
+/// Parameters: command_string, stdin, cwd, env, fs
+pub type ExecFn = Arc<dyn Fn(String, String, String, HashMap<String, String>, Arc<dyn FileSystem>)
+    -> Pin<Box<dyn Future<Output = CommandResult> + Send>> + Send + Sync>;
+
+/// HTTP response for fetch callback
+#[derive(Debug, Clone)]
+pub struct FetchResponse {
+    pub status: u16,
+    pub headers: HashMap<String, String>,
+    pub body: String,
+    pub url: String,
+}
+
+/// Callback for HTTP requests (used by curl)
+/// Parameters: url, method, headers, body
+pub type FetchFn = Arc<dyn Fn(String, String, HashMap<String, String>, Option<String>)
+    -> Pin<Box<dyn Future<Output = Result<FetchResponse, String>> + Send>> + Send + Sync>;
 
 /// 命令执行结果
 #[derive(Debug, Clone)]
@@ -33,6 +54,8 @@ pub struct CommandContext {
     pub cwd: String,
     pub env: HashMap<String, String>,
     pub fs: Arc<dyn FileSystem>,
+    pub exec_fn: Option<ExecFn>,
+    pub fetch_fn: Option<FetchFn>,
 }
 
 /// 命令 trait

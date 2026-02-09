@@ -226,6 +226,8 @@ mod tests {
             cwd: "/".to_string(),
             env: HashMap::new(),
             fs,
+            exec_fn: None,
+            fetch_fn: None,
         }
     }
 
@@ -264,6 +266,8 @@ mod tests {
             cwd: "/".to_string(),
             env: HashMap::new(),
             fs,
+            exec_fn: None,
+            fetch_fn: None,
         };
         let cmd = LsCommand;
         let result = cmd.execute(ctx).await;

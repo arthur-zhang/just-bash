@@ -62,6 +62,19 @@ use super::sort::SortCommand;
 use super::sed::SedCommand;
 use super::awk::AwkCommand;
 
+// Batch C imports
+use super::jq::JqCommand;
+use super::yq::YqCommand;
+
+// Batch D imports
+use super::base64_cmd::Base64Command;
+use super::diff_cmd::DiffCommand;
+use super::gzip::{GzipCommand, GunzipCommand, ZcatCommand};
+use super::find::FindCommand;
+use super::tar::TarCommand;
+use super::xargs::XargsCommand;
+use super::curl::CurlCommand;
+
 /// 注册批次 A 的所有命令
 pub fn register_batch_a(registry: &mut CommandRegistry) {
     registry.register(Box::new(BasenameCommand));
@@ -106,5 +119,43 @@ pub fn create_batch_ab_registry() -> CommandRegistry {
     let mut registry = CommandRegistry::new();
     register_batch_a(&mut registry);
     register_batch_b(&mut registry);
+    registry
+}
+
+/// 注册批次 C 的所有命令
+pub fn register_batch_c(registry: &mut CommandRegistry) {
+    registry.register(Box::new(JqCommand));
+    registry.register(Box::new(YqCommand));
+}
+
+/// 创建包含批次 A、B 和 C 命令的注册表
+pub fn create_batch_abc_registry() -> CommandRegistry {
+    let mut registry = CommandRegistry::new();
+    register_batch_a(&mut registry);
+    register_batch_b(&mut registry);
+    register_batch_c(&mut registry);
+    registry
+}
+
+/// 注册批次 D 的所有命令
+pub fn register_batch_d(registry: &mut CommandRegistry) {
+    registry.register(Box::new(Base64Command));
+    registry.register(Box::new(DiffCommand));
+    registry.register(Box::new(GzipCommand));
+    registry.register(Box::new(GunzipCommand));
+    registry.register(Box::new(ZcatCommand));
+    registry.register(Box::new(FindCommand));
+    registry.register(Box::new(TarCommand));
+    registry.register(Box::new(XargsCommand));
+    registry.register(Box::new(CurlCommand));
+}
+
+/// 创建包含批次 A、B、C 和 D 命令的注册表
+pub fn create_batch_abcd_registry() -> CommandRegistry {
+    let mut registry = CommandRegistry::new();
+    register_batch_a(&mut registry);
+    register_batch_b(&mut registry);
+    register_batch_c(&mut registry);
+    register_batch_d(&mut registry);
     registry
 }

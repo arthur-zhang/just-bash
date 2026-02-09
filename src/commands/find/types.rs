@@ -64,6 +64,9 @@ pub struct EvalContext {
     pub mode: u32,
     pub mtime: SystemTime,
     pub depth: usize,
+    pub is_empty: bool,
+    pub newer_ref_mtime: Option<SystemTime>,
+    pub starting_point: String,
 }
 
 #[derive(Debug, Clone)]

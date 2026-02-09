@@ -145,16 +145,22 @@
 - 新增测试: 239 个（25 operations + 31 lexer + 36 parser + 73 evaluator + 35 jq + 17 yq-formats + 22 yq-command）
 - 总测试数: 1,619 个（全部通过）
 
-#### 批次 D - 其他
-| 命令 | 行数 | 说明 |
-|------|------|------|
-| find | ~400 | 查找文件 |
-| xargs | ~200 | 构建命令 |
-| diff | ~300 | 比较文件 |
-| tar | ~400 | 归档 |
-| gzip | ~200 | 压缩 |
-| base64 | ~100 | 编码 |
-| curl | ~300 | HTTP 客户端 |
+#### 批次 D - 其他 ✅ 完成于 2026-02-07
+| 命令 | 行数 | 状态 | 说明 |
+|------|------|------|------|
+| base64 | ~368 | ✅ 已实现 | 编码/解码，支持 -d/-w |
+| diff | ~335 | ✅ 已实现 | 文件比较，支持 -u/-q/-s/-i（使用 similar 库） |
+| gzip | ~1,096 | ✅ 已实现 | 压缩/解压（gzip/gunzip/zcat），支持 -c/-d/-f/-k/-l/-n/-N/-r/-S/-t/-v/-1~-9 |
+| find | ~2,393 | ✅ 已实现 | 查找文件（4 模块：types/parser/matcher/mod），支持 -name/-type/-size/-mtime/-exec/-delete/-printf 等 |
+| tar | ~2,858 | ✅ 已实现 | 归档（3 模块：options/archive/mod），支持 -c/-x/-t/-r/-u/-z/-v/-C/--exclude/--strip |
+| xargs | ~428 | ✅ 已实现 | 构建命令，支持 -I/-d/-n/-P/-0/-t/-r |
+| curl | ~1,385 | ✅ 已实现 | HTTP 客户端（5 模块：types/parse/form/response_formatting/mod），支持 -X/-H/-d/-F/-o/-i/-L/-f/-s/-v/-u/-w |
+
+**批次 D 实现统计**:
+- 新增文件: 16 个（base64: 1, diff: 1, gzip: 1, find: 4, tar: 3, xargs: 1, curl: 5, types.rs 扩展）
+- 新增代码: ~8,863 行
+- 新增测试: 269 个（15 base64 + 12 diff + 30 gzip + 19 find-parser + 25 find-matcher + 20 find-command + 25 tar-options + 21 tar-archive + 29 tar-command + 15 xargs + 54 curl + 4 misc）
+- 总测试数: 1,888 个（全部通过）
 
 ---
 
@@ -198,7 +204,7 @@
   - [x] 批次 B 补充 - sed ✅ 1,034 个测试
   - [x] 批次 B 补充 - awk ✅ 1,380 个测试
   - [x] 批次 C - 数据格式 ✅ 1,619 个测试
-  - [ ] 批次 D - 其他
+  - [x] 批次 D - 其他 ✅ 1,888 个测试
 - [ ] 第三阶段 - 辅助模块
 - [ ] 第四阶段 - 接口层
 
@@ -219,4 +225,5 @@
 | commands (sed) | 115 | ✅ |
 | commands (awk) | 346 | ✅ |
 | commands (batch C: jq/yq) | 239 | ✅ |
-| **总计** | **1,619** | ✅ |
+| commands (batch D) | 269 | ✅ |
+| **总计** | **1,888** | ✅ |

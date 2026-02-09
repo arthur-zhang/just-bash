@@ -7,6 +7,7 @@ pub mod cut;
 pub mod cp;
 pub mod diff_cmd;
 pub mod dirname;
+pub mod find;
 pub mod grep;
 pub mod gzip;
 pub mod head;

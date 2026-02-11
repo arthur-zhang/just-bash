@@ -75,6 +75,23 @@ use super::tar::TarCommand;
 use super::xargs::XargsCommand;
 use super::curl::CurlCommand;
 
+// Batch E imports
+use super::echo::EchoCommand;
+use super::env::{EnvCommand, PrintenvCommand};
+use super::printf::PrintfCommand;
+use super::pwd::PwdCommand;
+use super::ln::LnCommand;
+use super::chmod::ChmodCommand;
+use super::date::DateCommand;
+
+// Batch F imports
+use super::md5sum::{Md5sumCommand, Sha1sumCommand, Sha256sumCommand};
+use super::stat_cmd::StatCommand;
+use super::seq::SeqCommand;
+use super::tee::TeeCommand;
+use super::sleep_cmd::SleepCommand;
+use super::split_cmd::SplitCommand;
+
 /// 注册批次 A 的所有命令
 pub fn register_batch_a(registry: &mut CommandRegistry) {
     registry.register(Box::new(BasenameCommand));
@@ -157,5 +174,52 @@ pub fn create_batch_abcd_registry() -> CommandRegistry {
     register_batch_b(&mut registry);
     register_batch_c(&mut registry);
     register_batch_d(&mut registry);
+    registry
+}
+
+/// 注册批次 E 的所有命令 (echo, env, printf, pwd, ln, chmod, date)
+pub fn register_batch_e(registry: &mut CommandRegistry) {
+    registry.register(Box::new(EchoCommand));
+    registry.register(Box::new(EnvCommand));
+    registry.register(Box::new(PrintenvCommand));
+    registry.register(Box::new(PrintfCommand));
+    registry.register(Box::new(PwdCommand));
+    registry.register(Box::new(LnCommand));
+    registry.register(Box::new(ChmodCommand));
+    registry.register(Box::new(DateCommand));
+}
+
+/// 创建包含批次 A、B、C、D 和 E 命令的注册表
+pub fn create_batch_abcde_registry() -> CommandRegistry {
+    let mut registry = CommandRegistry::new();
+    register_batch_a(&mut registry);
+    register_batch_b(&mut registry);
+    register_batch_c(&mut registry);
+    register_batch_d(&mut registry);
+    register_batch_e(&mut registry);
+    registry
+}
+
+/// 注册批次 F 的所有命令 (md5sum, sha1sum, sha256sum, stat, seq, tee, sleep, split)
+pub fn register_batch_f(registry: &mut CommandRegistry) {
+    registry.register(Box::new(Md5sumCommand));
+    registry.register(Box::new(Sha1sumCommand));
+    registry.register(Box::new(Sha256sumCommand));
+    registry.register(Box::new(StatCommand));
+    registry.register(Box::new(SeqCommand));
+    registry.register(Box::new(TeeCommand));
+    registry.register(Box::new(SleepCommand));
+    registry.register(Box::new(SplitCommand));
+}
+
+/// 创建包含批次 A-F 命令的注册表
+pub fn create_batch_abcdef_registry() -> CommandRegistry {
+    let mut registry = CommandRegistry::new();
+    register_batch_a(&mut registry);
+    register_batch_b(&mut registry);
+    register_batch_c(&mut registry);
+    register_batch_d(&mut registry);
+    register_batch_e(&mut registry);
+    register_batch_f(&mut registry);
     registry
 }

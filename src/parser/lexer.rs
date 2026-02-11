@@ -10,6 +10,9 @@
 
 use std::collections::HashMap;
 
+/// Max heredoc size to prevent memory exhaustion (10MB)
+const MAX_HEREDOC_SIZE: usize = 10_485_760;
+
 /// Token types for bash lexer
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TokenType {
@@ -1712,6 +1715,14 @@ impl Lexer {
                 }
 
                 content.push_str(&line_content);
+                // Check heredoc size limit to prevent memory exhaustion
+                if content.len() > MAX_HEREDOC_SIZE {
+                    return Err(LexerError::new(
+                        format!("Heredoc size limit exceeded ({} bytes)", MAX_HEREDOC_SIZE),
+                        start_line,
+                        start_column,
+                    ));
+                }
                 if self.pos < self.input.len() && self.input[self.pos] == '\n' {
                     content.push('\n');
                     self.pos += 1;

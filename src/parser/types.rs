@@ -10,6 +10,7 @@ use crate::parser::lexer::{Token, TokenType};
 pub const MAX_INPUT_SIZE: usize = 1_000_000; // 1MB max input
 pub const MAX_TOKENS: usize = 100_000; // Max tokens to parse
 pub const MAX_PARSE_ITERATIONS: usize = 1_000_000; // Max iterations in parsing loops
+pub const MAX_PARSER_DEPTH: usize = 200; // Max recursion depth for nested constructs
 
 /// Check if a token type is a redirection token
 pub fn is_redirection_token(t: TokenType) -> bool {

@@ -21,7 +21,7 @@ use crate::parser::parser_substitution::{
     parse_backtick_substitution_from_string, parse_command_substitution_from_string,
     ErrorFn, ParserFactory,
 };
-use crate::parser::types::ParseException;
+use crate::parser::types::{ParseException, MAX_PARSER_DEPTH};
 use crate::parser::word_parser::parse_arith_expr_from_string;
 use crate::parser::expansion_parser::{parse_word_parts, ExpansionContext};
 use crate::parser::conditional_parser::{parse_conditional_expression, CondParserContext, CondToken};
@@ -31,6 +31,7 @@ use std::cell::RefCell;
 pub const MAX_INPUT_SIZE: usize = 10_000_000;
 pub const MAX_TOKENS: usize = 100_000;
 pub const MAX_PARSE_ITERATIONS: usize = 1_000_000;
+// Note: MAX_PARSER_DEPTH is imported from types.rs
 
 /// Pending heredoc information
 #[derive(Debug, Clone)]
@@ -134,6 +135,19 @@ fn create_expansion_context<'a>() -> ExpansionContext<'a> {
     }
 }
 
+/// Guard that decrements parse depth when dropped
+pub struct DepthGuard {
+    depth: *mut usize,
+}
+
+impl Drop for DepthGuard {
+    fn drop(&mut self) {
+        unsafe {
+            *self.depth -= 1;
+        }
+    }
+}
+
 /// Main parser struct
 pub struct Parser {
     tokens: Vec<Token>,
@@ -141,6 +155,7 @@ pub struct Parser {
     pending_heredocs: Vec<PendingHeredoc>,
     pending_redirections: Vec<RedirectionNode>,
     parse_iterations: usize,
+    parse_depth: usize,
     input: String,
 }
 
@@ -153,6 +168,7 @@ impl Parser {
             pending_heredocs: Vec::new(),
             pending_redirections: Vec::new(),
             parse_iterations: 0,
+            parse_depth: 0,
             input: String::new(),
         }
     }
@@ -173,6 +189,20 @@ impl Parser {
             ));
         }
         Ok(())
+    }
+
+    /// Increment parse depth and check limit to prevent stack overflow
+    /// from deeply nested constructs. Returns a guard that decrements depth when dropped.
+    pub fn enter_depth(&mut self) -> Result<DepthGuard, ParseException> {
+        self.parse_depth += 1;
+        if self.parse_depth > MAX_PARSER_DEPTH {
+            return Err(ParseException::new(
+                &format!("Maximum parser nesting depth exceeded ({})", MAX_PARSER_DEPTH),
+                self.current().line,
+                self.current().column,
+            ));
+        }
+        Ok(DepthGuard { depth: &mut self.parse_depth as *mut usize })
     }
 
     /// Parse a bash script string
@@ -203,6 +233,7 @@ impl Parser {
         self.pending_heredocs = Vec::new();
         self.pending_redirections = Vec::new();
         self.parse_iterations = 0;
+        self.parse_depth = 0;
 
         self.parse_script()
     }
@@ -214,6 +245,7 @@ impl Parser {
         self.pending_heredocs = Vec::new();
         self.pending_redirections = Vec::new();
         self.parse_iterations = 0;
+        self.parse_depth = 0;
 
         self.parse_script()
     }
@@ -1834,6 +1866,7 @@ impl Parser {
     // ===========================================================================
 
     pub fn parse_compound_list(&mut self) -> Result<Vec<StatementNode>, ParseException> {
+        let _depth_guard = self.enter_depth()?;
         let mut statements = Vec::new();
 
         self.skip_newlines();

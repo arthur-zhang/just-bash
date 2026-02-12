@@ -118,6 +118,11 @@ use super::timeout_cmd::TimeoutCommand;
 use super::tree_cmd::TreeCommand;
 use super::expr_cmd::ExprCommand;
 
+// Batch K imports
+use super::od_cmd::OdCommand;
+use super::du_cmd::DuCommand;
+use super::file_cmd::FileCommand;
+
 /// 注册批次 A 的所有命令
 pub fn register_batch_a(registry: &mut CommandRegistry) {
     registry.register(Box::new(BasenameCommand));
@@ -340,5 +345,29 @@ pub fn create_batch_abcdefghij_registry() -> CommandRegistry {
     register_batch_h(&mut registry);
     register_batch_i(&mut registry);
     register_batch_j(&mut registry);
+    registry
+}
+
+/// 注册批次 K 的所有命令 (od, du, file)
+pub fn register_batch_k(registry: &mut CommandRegistry) {
+    registry.register(Box::new(OdCommand));
+    registry.register(Box::new(DuCommand));
+    registry.register(Box::new(FileCommand));
+}
+
+/// 创建包含批次 A-K 命令的注册表
+pub fn create_batch_abcdefghijk_registry() -> CommandRegistry {
+    let mut registry = CommandRegistry::new();
+    register_batch_a(&mut registry);
+    register_batch_b(&mut registry);
+    register_batch_c(&mut registry);
+    register_batch_d(&mut registry);
+    register_batch_e(&mut registry);
+    register_batch_f(&mut registry);
+    register_batch_g(&mut registry);
+    register_batch_h(&mut registry);
+    register_batch_i(&mut registry);
+    register_batch_j(&mut registry);
+    register_batch_k(&mut registry);
     registry
 }

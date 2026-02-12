@@ -113,6 +113,11 @@ use super::strings_cmd::StringsCommand;
 use super::column_cmd::ColumnCommand;
 use super::comm_cmd::CommCommand;
 
+// Batch J imports
+use super::timeout_cmd::TimeoutCommand;
+use super::tree_cmd::TreeCommand;
+use super::expr_cmd::ExprCommand;
+
 /// 注册批次 A 的所有命令
 pub fn register_batch_a(registry: &mut CommandRegistry) {
     registry.register(Box::new(BasenameCommand));
@@ -312,5 +317,28 @@ pub fn create_batch_abcdefghi_registry() -> CommandRegistry {
     register_batch_g(&mut registry);
     register_batch_h(&mut registry);
     register_batch_i(&mut registry);
+    registry
+}
+
+/// 注册批次 J 的所有命令 (timeout, tree, expr)
+pub fn register_batch_j(registry: &mut CommandRegistry) {
+    registry.register(Box::new(TimeoutCommand));
+    registry.register(Box::new(TreeCommand));
+    registry.register(Box::new(ExprCommand));
+}
+
+/// 创建包含批次 A-J 命令的注册表
+pub fn create_batch_abcdefghij_registry() -> CommandRegistry {
+    let mut registry = CommandRegistry::new();
+    register_batch_a(&mut registry);
+    register_batch_b(&mut registry);
+    register_batch_c(&mut registry);
+    register_batch_d(&mut registry);
+    register_batch_e(&mut registry);
+    register_batch_f(&mut registry);
+    register_batch_g(&mut registry);
+    register_batch_h(&mut registry);
+    register_batch_i(&mut registry);
+    register_batch_j(&mut registry);
     registry
 }

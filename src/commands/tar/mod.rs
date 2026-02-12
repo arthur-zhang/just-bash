@@ -1676,4 +1676,477 @@ mod tests {
         assert!(!matches_exclude("test.txt", &patterns));
         assert!(matches_exclude("dir/test.log", &patterns));
     }
+
+    // Binary data tests
+    #[tokio::test]
+    async fn test_binary_file_with_high_bytes() {
+        let ctx = make_ctx(
+            vec!["-cf", "archive.tar", "binary.bin"],
+            "",
+            vec![("/binary.bin", &[0x80, 0x90, 0xa0, 0xb0, 0xff])],
+        )
+        .await;
+        let fs = ctx.fs.clone();
+        let result = TarCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+
+        let ctx2 = CommandContext {
+            args: vec![
+                "-xf".to_string(),
+                "archive.tar".to_string(),
+                "-C".to_string(),
+                "/dest".to_string(),
+            ],
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: fs.clone(),
+            exec_fn: None,
+            fetch_fn: None,
+        };
+        TarCommand.execute(ctx2).await;
+
+        let data = fs.read_file_buffer("/dest/binary.bin").await.unwrap();
+        assert_eq!(data, vec![0x80, 0x90, 0xa0, 0xb0, 0xff]);
+    }
+
+    #[tokio::test]
+    async fn test_binary_file_with_null_bytes() {
+        let ctx = make_ctx(
+            vec!["-cf", "archive.tar", "nulls.bin"],
+            "",
+            vec![("/nulls.bin", &[0x41, 0x00, 0x42, 0x00, 0x43])],
+        )
+        .await;
+        let fs = ctx.fs.clone();
+        let result = TarCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+
+        let ctx2 = CommandContext {
+            args: vec![
+                "-xf".to_string(),
+                "archive.tar".to_string(),
+                "-C".to_string(),
+                "/dest".to_string(),
+            ],
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: fs.clone(),
+            exec_fn: None,
+            fetch_fn: None,
+        };
+        TarCommand.execute(ctx2).await;
+
+        let data = fs.read_file_buffer("/dest/nulls.bin").await.unwrap();
+        assert_eq!(data, vec![0x41, 0x00, 0x42, 0x00, 0x43]);
+    }
+
+    #[tokio::test]
+    async fn test_binary_file_all_byte_values() {
+        let all_bytes: Vec<u8> = (0..=255).collect();
+        let ctx = make_ctx(
+            vec!["-cf", "archive.tar", "allbytes.bin"],
+            "",
+            vec![("/allbytes.bin", &all_bytes)],
+        )
+        .await;
+        let fs = ctx.fs.clone();
+        let result = TarCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+
+        let ctx2 = CommandContext {
+            args: vec![
+                "-xf".to_string(),
+                "archive.tar".to_string(),
+                "-C".to_string(),
+                "/dest".to_string(),
+            ],
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: fs.clone(),
+            exec_fn: None,
+            fetch_fn: None,
+        };
+        TarCommand.execute(ctx2).await;
+
+        let data = fs.read_file_buffer("/dest/allbytes.bin").await.unwrap();
+        assert_eq!(data.len(), 256);
+        for i in 0..256 {
+            assert_eq!(data[i], i as u8);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_list_archive_from_stdin() {
+        let ctx = make_ctx_str(
+            vec!["-cf", "archive.tar", "file.txt"],
+            "",
+            vec![("/file.txt", "content")],
+        )
+        .await;
+        let fs = ctx.fs.clone();
+        TarCommand.execute(ctx).await;
+
+        let archive_data = fs.read_file_buffer("/archive.tar").await.unwrap();
+        let stdin_str: String =
+            archive_data.iter().map(|&b| b as char).collect();
+
+        let ctx2 = CommandContext {
+            args: vec!["-t".to_string()],
+            stdin: stdin_str,
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: fs.clone(),
+            exec_fn: None,
+            fetch_fn: None,
+        };
+        let result = TarCommand.execute(ctx2).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("file.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_extract_archive_from_stdin() {
+        let ctx = make_ctx_str(
+            vec!["-cf", "archive.tar", "data.txt"],
+            "",
+            vec![("/data.txt", "hello world")],
+        )
+        .await;
+        let fs = ctx.fs.clone();
+        TarCommand.execute(ctx).await;
+
+        let archive_data = fs.read_file_buffer("/archive.tar").await.unwrap();
+        let stdin_str: String =
+            archive_data.iter().map(|&b| b as char).collect();
+
+        let ctx2 = CommandContext {
+            args: vec![
+                "-x".to_string(),
+                "-C".to_string(),
+                "/dest".to_string(),
+            ],
+            stdin: stdin_str,
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: fs.clone(),
+            exec_fn: None,
+            fetch_fn: None,
+        };
+        let result = TarCommand.execute(ctx2).await;
+        assert_eq!(result.exit_code, 0);
+
+        let content = fs.read_file("/dest/data.txt").await.unwrap();
+        assert_eq!(content, "hello world");
+    }
+
+    #[tokio::test]
+    async fn test_gzip_archive_from_stdin() {
+        let ctx = make_ctx_str(
+            vec!["-czf", "archive.tar.gz", "file.txt"],
+            "",
+            vec![("/file.txt", "compressed content")],
+        )
+        .await;
+        let fs = ctx.fs.clone();
+        TarCommand.execute(ctx).await;
+
+        let archive_data =
+            fs.read_file_buffer("/archive.tar.gz").await.unwrap();
+        let stdin_str: String =
+            archive_data.iter().map(|&b| b as char).collect();
+
+        let ctx2 = CommandContext {
+            args: vec![
+                "-xz".to_string(),
+                "-C".to_string(),
+                "/dest".to_string(),
+            ],
+            stdin: stdin_str,
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: fs.clone(),
+            exec_fn: None,
+            fetch_fn: None,
+        };
+        let result = TarCommand.execute(ctx2).await;
+        assert_eq!(result.exit_code, 0);
+
+        let content = fs.read_file("/dest/file.txt").await.unwrap();
+        assert_eq!(content, "compressed content");
+    }
+
+    #[tokio::test]
+    async fn test_utf8_text_archive() {
+        let ctx = make_ctx_str(
+            vec!["-cf", "archive.tar", "unicode.txt"],
+            "",
+            vec![("/unicode.txt", "Hello World 你好世界")],
+        )
+        .await;
+        let fs = ctx.fs.clone();
+        let result = TarCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+
+        let ctx2 = CommandContext {
+            args: vec![
+                "-xf".to_string(),
+                "archive.tar".to_string(),
+                "-C".to_string(),
+                "/dest".to_string(),
+            ],
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: fs.clone(),
+            exec_fn: None,
+            fetch_fn: None,
+        };
+        TarCommand.execute(ctx2).await;
+
+        let content = fs.read_file("/dest/unicode.txt").await.unwrap();
+        assert_eq!(content, "Hello World 你好世界");
+    }
+
+    #[tokio::test]
+    async fn test_special_characters_in_filename() {
+        let ctx = make_ctx_str(
+            vec!["-cf", "archive.tar", "file-name_123.txt"],
+            "",
+            vec![("/file-name_123.txt", "special filename")],
+        )
+        .await;
+        let fs = ctx.fs.clone();
+        let result = TarCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+
+        let ctx2 = CommandContext {
+            args: vec!["-tf".to_string(), "archive.tar".to_string()],
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: fs.clone(),
+            exec_fn: None,
+            fetch_fn: None,
+        };
+        let result = TarCommand.execute(ctx2).await;
+        assert!(result.stdout.contains("file-name_123.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_extract_specific_file_by_pattern() {
+        let ctx = make_ctx_str(
+            vec!["-cf", "archive.tar", "dir"],
+            "",
+            vec![
+                ("/dir/file1.txt", "Content 1"),
+                ("/dir/file2.txt", "Content 2"),
+                ("/dir/other.log", "Log content"),
+            ],
+        )
+        .await;
+        let fs = ctx.fs.clone();
+        TarCommand.execute(ctx).await;
+
+        let ctx2 = CommandContext {
+            args: vec![
+                "-xf".to_string(),
+                "archive.tar".to_string(),
+                "dir/file1.txt".to_string(),
+                "-C".to_string(),
+                "/dest".to_string(),
+            ],
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: fs.clone(),
+            exec_fn: None,
+            fetch_fn: None,
+        };
+        let result = TarCommand.execute(ctx2).await;
+        assert_eq!(result.exit_code, 0);
+
+        let file1 = fs.read_file("/dest/dir/file1.txt").await.unwrap();
+        assert_eq!(file1, "Content 1");
+        assert!(fs.read_file("/dest/dir/file2.txt").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_extract_directory_by_pattern() {
+        let ctx = make_ctx_str(
+            vec!["-cf", "archive.tar", "project"],
+            "",
+            vec![
+                ("/project/src/main.js", "main"),
+                ("/project/src/lib.js", "lib"),
+                ("/project/docs/readme.md", "docs"),
+            ],
+        )
+        .await;
+        let fs = ctx.fs.clone();
+        TarCommand.execute(ctx).await;
+
+        let ctx2 = CommandContext {
+            args: vec![
+                "-xf".to_string(),
+                "archive.tar".to_string(),
+                "project/src".to_string(),
+                "-C".to_string(),
+                "/dest".to_string(),
+            ],
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: fs.clone(),
+            exec_fn: None,
+            fetch_fn: None,
+        };
+        let result = TarCommand.execute(ctx2).await;
+        assert_eq!(result.exit_code, 0);
+
+        let main = fs.read_file("/dest/project/src/main.js").await.unwrap();
+        assert_eq!(main, "main");
+        assert!(fs
+            .read_file("/dest/project/docs/readme.md")
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn test_round_trip_directory_with_gzip() {
+        let ctx = make_ctx_str(
+            vec!["-czvf", "backup.tar.gz", "project"],
+            "",
+            vec![
+                ("/project/src/main.js", "console.log('hello');"),
+                ("/project/src/utils.js", "export const helper = () => {};"),
+                ("/project/package.json", r#"{"name": "test"}"#),
+                (
+                    "/project/README.md",
+                    "# Project\n\nThis is a test project.",
+                ),
+            ],
+        )
+        .await;
+        let fs = ctx.fs.clone();
+        let result = TarCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+
+        let ctx2 = CommandContext {
+            args: vec![
+                "-xzvf".to_string(),
+                "backup.tar.gz".to_string(),
+                "-C".to_string(),
+                "/restore".to_string(),
+            ],
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: fs.clone(),
+            exec_fn: None,
+            fetch_fn: None,
+        };
+        let result = TarCommand.execute(ctx2).await;
+        assert_eq!(result.exit_code, 0);
+
+        let main = fs
+            .read_file("/restore/project/src/main.js")
+            .await
+            .unwrap();
+        assert_eq!(main, "console.log('hello');");
+
+        let pkg = fs
+            .read_file("/restore/project/package.json")
+            .await
+            .unwrap();
+        assert_eq!(pkg, r#"{"name": "test"}"#);
+    }
+
+    #[tokio::test]
+    async fn test_binary_stdin_gzip_archive() {
+        let ctx = make_ctx_str(
+            vec!["-czf", "test.tar.gz", "data.txt"],
+            "",
+            vec![("/data.txt", "Hello World")],
+        )
+        .await;
+        let fs = ctx.fs.clone();
+        let result = TarCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+
+        let ctx2 = CommandContext {
+            args: vec!["-tzf".to_string(), "test.tar.gz".to_string()],
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: fs.clone(),
+            exec_fn: None,
+            fetch_fn: None,
+        };
+        let result = TarCommand.execute(ctx2).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("data.txt"));
+
+        let archive_data = fs.read_file_buffer("/test.tar.gz").await.unwrap();
+        let stdin_str: String =
+            archive_data.iter().map(|&b| b as char).collect();
+
+        let ctx3 = CommandContext {
+            args: vec![
+                "-xz".to_string(),
+                "-C".to_string(),
+                "/dest".to_string(),
+            ],
+            stdin: stdin_str,
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: fs.clone(),
+            exec_fn: None,
+            fetch_fn: None,
+        };
+        let result = TarCommand.execute(ctx3).await;
+        assert_eq!(result.exit_code, 0);
+
+        let content = fs.read_file("/dest/data.txt").await.unwrap();
+        assert_eq!(content, "Hello World");
+    }
+
+    #[tokio::test]
+    async fn test_large_directory_tree() {
+        let owned_files: Vec<(String, String)> = (0..50)
+            .map(|i| {
+                (
+                    format!("/bigdir/file{:03}.txt", i),
+                    format!("Content {}", i),
+                )
+            })
+            .collect();
+
+        let file_refs: Vec<(&str, &str)> = owned_files
+            .iter()
+            .map(|(p, c)| (p.as_str(), c.as_str()))
+            .collect();
+
+        let ctx =
+            make_ctx_str(vec!["-cf", "archive.tar", "bigdir"], "", file_refs)
+                .await;
+        let fs = ctx.fs.clone();
+        let result = TarCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+
+        let ctx2 = CommandContext {
+            args: vec!["-tf".to_string(), "archive.tar".to_string()],
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: fs.clone(),
+            exec_fn: None,
+            fetch_fn: None,
+        };
+        let result = TarCommand.execute(ctx2).await;
+        let line_count = result.stdout.lines().count();
+        assert!(line_count >= 50);
+    }
 }

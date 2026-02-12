@@ -420,4 +420,139 @@ mod tests {
         assert!(r.stdout.contains("sha256sum"));
         assert!(r.stdout.contains("SHA256"));
     }
+
+    #[tokio::test]
+    async fn test_md5_multiple_files() {
+        let fs = Arc::new(InMemoryFs::new());
+        fs.write_file("/tmp/a.txt", "a".as_bytes()).await.unwrap();
+        fs.write_file("/tmp/b.txt", "b".as_bytes()).await.unwrap();
+        let r = Md5sumCommand.execute(make_ctx_with_fs(vec!["/tmp/a.txt", "/tmp/b.txt"], "", fs)).await;
+        assert!(r.stdout.contains("0cc175b9c0f1b6a831c399e269772661  /tmp/a.txt"));
+        assert!(r.stdout.contains("92eb5ffee6ae2fec3ad71c777531578f  /tmp/b.txt"));
+        assert_eq!(r.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_md5_check_multiple_files() {
+        let fs = Arc::new(InMemoryFs::new());
+        fs.write_file("/tmp/hello.txt", "hello".as_bytes()).await.unwrap();
+        fs.write_file("/tmp/world.txt", "world".as_bytes()).await.unwrap();
+        fs.write_file("/tmp/sums.txt", "5d41402abc4b2a76b9719d911017c592  /tmp/hello.txt\n7d793037a0760186574b0282f2f435e7  /tmp/world.txt\n".as_bytes()).await.unwrap();
+        let r = Md5sumCommand.execute(make_ctx_with_fs(vec!["-c", "/tmp/sums.txt"], "", fs)).await;
+        assert!(r.stdout.contains("/tmp/hello.txt: OK"));
+        assert!(r.stdout.contains("/tmp/world.txt: OK"));
+        assert_eq!(r.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_md5_check_mixed_results() {
+        let fs = Arc::new(InMemoryFs::new());
+        fs.write_file("/tmp/correct.txt", "hello".as_bytes()).await.unwrap();
+        fs.write_file("/tmp/wrong.txt", "wrong".as_bytes()).await.unwrap();
+        fs.write_file("/tmp/sums.txt", "5d41402abc4b2a76b9719d911017c592  /tmp/correct.txt\n5d41402abc4b2a76b9719d911017c592  /tmp/wrong.txt\n".as_bytes()).await.unwrap();
+        let r = Md5sumCommand.execute(make_ctx_with_fs(vec!["-c", "/tmp/sums.txt"], "", fs)).await;
+        assert!(r.stdout.contains("/tmp/correct.txt: OK"));
+        assert!(r.stdout.contains("/tmp/wrong.txt: FAILED"));
+        assert!(r.stdout.contains("WARNING"));
+        assert!(r.stdout.contains("1 computed checksum"));
+        assert_eq!(r.exit_code, 1);
+    }
+
+    #[tokio::test]
+    async fn test_md5_binary_file_with_invalid_utf8() {
+        let fs = Arc::new(InMemoryFs::new());
+        // PNG magic bytes
+        fs.write_file("/binary.dat", &[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a]).await.unwrap();
+        let r = Md5sumCommand.execute(make_ctx_with_fs(vec!["/binary.dat"], "", fs)).await;
+        assert_eq!(r.stdout, "8eece9cc616084e69299f7f1a53a6404  /binary.dat\n");
+        assert_eq!(r.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_md5_binary_file_with_null_bytes() {
+        let fs = Arc::new(InMemoryFs::new());
+        fs.write_file("/nulls.dat", &[0x00, 0x00, 0x00, 0x00]).await.unwrap();
+        let r = Md5sumCommand.execute(make_ctx_with_fs(vec!["/nulls.dat"], "", fs)).await;
+        assert_eq!(r.stdout, "f1d3ff8443297732862df21dc4e57262  /nulls.dat\n");
+        assert_eq!(r.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_sha1_file() {
+        let fs = Arc::new(InMemoryFs::new());
+        fs.write_file("/test.txt", "test".as_bytes()).await.unwrap();
+        let r = Sha1sumCommand.execute(make_ctx_with_fs(vec!["/test.txt"], "", fs)).await;
+        assert_eq!(r.stdout, "a94a8fe5ccb19ba61c4c0873d391e987982fbbd3  /test.txt\n");
+        assert_eq!(r.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_sha256_file() {
+        let fs = Arc::new(InMemoryFs::new());
+        fs.write_file("/test.txt", "test".as_bytes()).await.unwrap();
+        let r = Sha256sumCommand.execute(make_ctx_with_fs(vec!["/test.txt"], "", fs)).await;
+        assert_eq!(r.stdout, "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08  /test.txt\n");
+        assert_eq!(r.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_sha256_binary_file() {
+        let fs = Arc::new(InMemoryFs::new());
+        fs.write_file("/binary.dat", &[0x89, 0x50, 0x4e, 0x47]).await.unwrap();
+        let r = Sha256sumCommand.execute(make_ctx_with_fs(vec!["/binary.dat"], "", fs)).await;
+        assert_eq!(r.stdout, "0f4636c78f65d3639ece5a064b5ae753e3408614a14fb18ab4d7540d2c248543  /binary.dat\n");
+        assert_eq!(r.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_sha1_check_ok() {
+        let fs = Arc::new(InMemoryFs::new());
+        fs.write_file("/hello.txt", "hello".as_bytes()).await.unwrap();
+        fs.write_file("/sums.txt", "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d  /hello.txt\n".as_bytes()).await.unwrap();
+        let r = Sha1sumCommand.execute(make_ctx_with_fs(vec!["-c", "/sums.txt"], "", fs)).await;
+        assert!(r.stdout.contains("/hello.txt: OK"));
+        assert_eq!(r.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_sha256_check_ok() {
+        let fs = Arc::new(InMemoryFs::new());
+        fs.write_file("/hello.txt", "hello".as_bytes()).await.unwrap();
+        fs.write_file("/sums.txt", "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824  /hello.txt\n".as_bytes()).await.unwrap();
+        let r = Sha256sumCommand.execute(make_ctx_with_fs(vec!["-c", "/sums.txt"], "", fs)).await;
+        assert!(r.stdout.contains("/hello.txt: OK"));
+        assert_eq!(r.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_md5_check_missing_file() {
+        let fs = Arc::new(InMemoryFs::new());
+        fs.write_file("/sums.txt", "5d41402abc4b2a76b9719d911017c592  /missing.txt\n".as_bytes()).await.unwrap();
+        let r = Md5sumCommand.execute(make_ctx_with_fs(vec!["-c", "/sums.txt"], "", fs)).await;
+        assert!(r.stdout.contains("/missing.txt: FAILED open or read"));
+        assert!(r.stdout.contains("WARNING"));
+        assert_eq!(r.exit_code, 1);
+    }
+
+    #[tokio::test]
+    async fn test_md5_stdin_dash() {
+        let r = Md5sumCommand.execute(make_ctx(vec!["-"], "hello")).await;
+        assert_eq!(r.stdout, "5d41402abc4b2a76b9719d911017c592  -\n");
+        assert_eq!(r.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_sha1_help() {
+        let r = Sha1sumCommand.execute(make_ctx(vec!["--help"], "")).await;
+        assert!(r.stdout.contains("sha1sum"));
+        assert!(r.stdout.contains("SHA1"));
+        assert_eq!(r.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_invalid_option() {
+        let r = Md5sumCommand.execute(make_ctx(vec!["-z"], "")).await;
+        assert!(r.stderr.contains("invalid option"));
+        assert_eq!(r.exit_code, 1);
+    }
 }

@@ -382,4 +382,153 @@ mod tests {
         let result = NlCommand.execute(ctx).await;
         assert_ne!(result.exit_code, 0);
     }
+
+    #[tokio::test]
+    async fn test_nl_multiple_files() {
+        let ctx = make_ctx(
+            vec!["/a.txt", "/b.txt"],
+            "",
+            vec![("/a.txt", "one\ntwo\n"), ("/b.txt", "three\nfour\n")],
+        ).await;
+        let result = NlCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("1"));
+        assert!(result.stdout.contains("one"));
+        assert!(result.stdout.contains("2"));
+        assert!(result.stdout.contains("two"));
+        assert!(result.stdout.contains("3"));
+        assert!(result.stdout.contains("three"));
+        assert!(result.stdout.contains("4"));
+        assert!(result.stdout.contains("four"));
+    }
+
+    #[tokio::test]
+    async fn test_nl_continues_numbering_across_files() {
+        let ctx = make_ctx(
+            vec!["-v10", "/a.txt", "/b.txt"],
+            "",
+            vec![("/a.txt", "one\n"), ("/b.txt", "two\n")],
+        ).await;
+        let result = NlCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("10"));
+        assert!(result.stdout.contains("one"));
+        assert!(result.stdout.contains("11"));
+        assert!(result.stdout.contains("two"));
+    }
+
+    #[tokio::test]
+    async fn test_nl_custom_separator() {
+        let ctx = make_ctx(vec!["-ba", "-s: "], "a\nb\n", vec![]).await;
+        let result = NlCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains(": a"));
+        assert!(result.stdout.contains(": b"));
+    }
+
+    #[tokio::test]
+    async fn test_nl_combined_options() {
+        let ctx = make_ctx(vec!["-ba", "-nrz", "-w4", "-s|", "-v100", "-i10"], "a\nb\nc\n", vec![]).await;
+        let result = NlCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("0100|a"));
+        assert!(result.stdout.contains("0110|b"));
+        assert!(result.stdout.contains("0120|c"));
+    }
+
+    #[tokio::test]
+    async fn test_nl_single_line_without_newline() {
+        let ctx = make_ctx(vec![], "hello", vec![]).await;
+        let result = NlCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("1"));
+        assert!(result.stdout.contains("hello"));
+    }
+
+    #[tokio::test]
+    async fn test_nl_whitespace_only_lines_default() {
+        let ctx = make_ctx(vec![], "a\n   \nb\n", vec![]).await;
+        let result = NlCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        let lines: Vec<&str> = result.stdout.lines().collect();
+        assert_eq!(lines.len(), 3);
+        // First line numbered
+        assert!(lines[0].contains("1"));
+        assert!(lines[0].contains("a"));
+        // Second line (whitespace) is numbered because it's not empty
+        assert!(lines[1].contains("2"));
+        // Third line numbered with 3
+        assert!(lines[2].contains("3"));
+        assert!(lines[2].contains("b"));
+    }
+
+    #[tokio::test]
+    async fn test_nl_negative_start_number() {
+        let ctx = make_ctx(vec!["-ba", "-v-1"], "a\nb\nc\n", vec![]).await;
+        let result = NlCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("-1"));
+        assert!(result.stdout.contains("0"));
+        assert!(result.stdout.contains("1"));
+    }
+
+    #[tokio::test]
+    async fn test_nl_error_invalid_body_style() {
+        let ctx = make_ctx(vec!["-bx"], "x", vec![]).await;
+        let result = NlCommand.execute(ctx).await;
+        assert_ne!(result.exit_code, 0);
+        assert!(result.stderr.contains("invalid body numbering style"));
+    }
+
+    #[tokio::test]
+    async fn test_nl_error_invalid_number_format() {
+        let ctx = make_ctx(vec!["-nxx"], "x", vec![]).await;
+        let result = NlCommand.execute(ctx).await;
+        assert_ne!(result.exit_code, 0);
+        assert!(result.stderr.contains("invalid line numbering format"));
+    }
+
+    #[tokio::test]
+    async fn test_nl_error_invalid_width() {
+        let ctx = make_ctx(vec!["-wabc"], "x", vec![]).await;
+        let result = NlCommand.execute(ctx).await;
+        assert_ne!(result.exit_code, 0);
+        assert!(result.stderr.contains("invalid line number field width"));
+    }
+
+    #[tokio::test]
+    async fn test_nl_error_invalid_start() {
+        let ctx = make_ctx(vec!["-vabc"], "x", vec![]).await;
+        let result = NlCommand.execute(ctx).await;
+        assert_ne!(result.exit_code, 0);
+        assert!(result.stderr.contains("invalid starting line number"));
+    }
+
+    #[tokio::test]
+    async fn test_nl_error_invalid_increment() {
+        let ctx = make_ctx(vec!["-iabc"], "x", vec![]).await;
+        let result = NlCommand.execute(ctx).await;
+        assert_ne!(result.exit_code, 0);
+        assert!(result.stderr.contains("invalid line number increment"));
+    }
+
+    #[tokio::test]
+    async fn test_nl_help_contains_usage() {
+        let ctx = make_ctx(vec!["--help"], "", vec![]).await;
+        let result = NlCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("nl"));
+        assert!(result.stdout.contains("number"));
+    }
+
+    #[tokio::test]
+    async fn test_nl_dash_reads_stdin() {
+        let ctx = make_ctx(vec!["-ba", "-"], "hello\nworld\n", vec![]).await;
+        let result = NlCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("1"));
+        assert!(result.stdout.contains("hello"));
+        assert!(result.stdout.contains("2"));
+        assert!(result.stdout.contains("world"));
+    }
 }

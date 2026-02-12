@@ -192,4 +192,44 @@ mod tests {
     async fn test_date_default() { let r = DateCommand.execute(make_ctx(vec![])).await; assert_eq!(r.exit_code, 0); assert!(!r.stdout.is_empty()); }
     #[tokio::test]
     async fn test_date_tab_newline() { let r = DateCommand.execute(make_ctx(vec!["+%Y%n%m"])).await; assert!(r.stdout.contains("\n")); }
+    #[tokio::test]
+    async fn test_date_month() { let r = DateCommand.execute(make_ctx(vec!["+%m"])).await; let m = r.stdout.trim(); assert!(m.len() == 2 && m.parse::<u32>().unwrap() >= 1 && m.parse::<u32>().unwrap() <= 12); }
+    #[tokio::test]
+    async fn test_date_day() { let r = DateCommand.execute(make_ctx(vec!["+%d"])).await; let d = r.stdout.trim(); assert!(d.len() == 2 && d.parse::<u32>().unwrap() >= 1 && d.parse::<u32>().unwrap() <= 31); }
+    #[tokio::test]
+    async fn test_date_full_date() { let r = DateCommand.execute(make_ctx(vec!["+%F"])).await; assert!(r.stdout.trim().len() == 10); assert!(r.stdout.contains("-")); }
+    #[tokio::test]
+    async fn test_date_full_time() { let r = DateCommand.execute(make_ctx(vec!["+%T"])).await; assert!(r.stdout.trim().len() == 8); assert!(r.stdout.contains(":")); }
+    #[tokio::test]
+    async fn test_date_hour() { let r = DateCommand.execute(make_ctx(vec!["+%H"])).await; let h = r.stdout.trim(); assert!(h.len() == 2 && h.parse::<u32>().unwrap() <= 23); }
+    #[tokio::test]
+    async fn test_date_12hour() { let r = DateCommand.execute(make_ctx(vec!["+%I"])).await; let h = r.stdout.trim(); assert!(h.len() == 2 && h.parse::<u32>().unwrap() >= 1 && h.parse::<u32>().unwrap() <= 12); }
+    #[tokio::test]
+    async fn test_date_minute() { let r = DateCommand.execute(make_ctx(vec!["+%M"])).await; let m = r.stdout.trim(); assert!(m.len() == 2 && m.parse::<u32>().unwrap() <= 59); }
+    #[tokio::test]
+    async fn test_date_second() { let r = DateCommand.execute(make_ctx(vec!["+%S"])).await; let s = r.stdout.trim(); assert!(s.len() == 2 && s.parse::<u32>().unwrap() <= 59); }
+    #[tokio::test]
+    async fn test_date_weekday() { let r = DateCommand.execute(make_ctx(vec!["+%a"])).await; let days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]; assert!(days.contains(&r.stdout.trim())); }
+    #[tokio::test]
+    async fn test_date_month_name() { let r = DateCommand.execute(make_ctx(vec!["+%b"])).await; let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]; assert!(months.contains(&r.stdout.trim())); }
+    #[tokio::test]
+    async fn test_date_timestamp() { let r = DateCommand.execute(make_ctx(vec!["+%s"])).await; let ts = r.stdout.trim().parse::<i64>().unwrap(); assert!(ts > 1700000000); }
+    #[tokio::test]
+    async fn test_date_ampm() { let r = DateCommand.execute(make_ctx(vec!["+%p"])).await; assert!(r.stdout.trim() == "AM" || r.stdout.trim() == "PM"); }
+    #[tokio::test]
+    async fn test_date_combined_format() { let r = DateCommand.execute(make_ctx(vec!["+%Y-%m-%d %H:%M:%S"])).await; assert!(r.stdout.contains("-") && r.stdout.contains(":")); }
+    #[tokio::test]
+    async fn test_date_with_date_option() { let r = DateCommand.execute(make_ctx(vec!["--date=2024-06-20T12:00:00", "+%F"])).await; assert_eq!(r.stdout, "2024-06-20\n"); }
+    #[tokio::test]
+    async fn test_date_iso_format() { let r = DateCommand.execute(make_ctx(vec!["-I"])).await; assert!(r.stdout.contains("T") && r.stdout.contains(":")); }
+    #[tokio::test]
+    async fn test_date_rfc_format() { let r = DateCommand.execute(make_ctx(vec!["-R"])).await; let days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]; assert!(days.iter().any(|d| r.stdout.contains(d))); }
+    #[tokio::test]
+    async fn test_date_utc_timezone() { let r = DateCommand.execute(make_ctx(vec!["-u", "+%Z"])).await; assert_eq!(r.stdout, "UTC\n"); }
+    #[tokio::test]
+    async fn test_date_parse_now() { let r = DateCommand.execute(make_ctx(vec!["-d", "now", "+%s"])).await; let ts = r.stdout.trim().parse::<i64>().unwrap(); assert!(ts > 1700000000); }
+    #[tokio::test]
+    async fn test_date_parse_today() { let r = DateCommand.execute(make_ctx(vec!["-d", "today", "+%F"])).await; assert!(r.stdout.trim().len() == 10); }
+    #[tokio::test]
+    async fn test_date_invalid_option() { let r = DateCommand.execute(make_ctx(vec!["-z"])).await; assert_eq!(r.exit_code, 1); assert!(r.stderr.contains("invalid option")); }
 }

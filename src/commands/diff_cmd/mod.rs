@@ -332,4 +332,185 @@ mod tests {
         assert_eq!(result.exit_code, 0);
         assert!(result.stdout.contains("Usage: diff"));
     }
+
+    #[tokio::test]
+    async fn test_show_added_lines() {
+        let ctx = make_ctx_with_files(
+            vec!["a.txt", "b.txt"],
+            "",
+            vec![("/a.txt", "line1\n"), ("/b.txt", "line1\nline2\n")],
+        ).await;
+        let result = DiffCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 1);
+        assert!(result.stdout.contains("+line2"));
+    }
+
+    #[tokio::test]
+    async fn test_show_removed_lines() {
+        let ctx = make_ctx_with_files(
+            vec!["a.txt", "b.txt"],
+            "",
+            vec![("/a.txt", "line1\nline2\n"), ("/b.txt", "line1\n")],
+        ).await;
+        let result = DiffCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 1);
+        assert!(result.stdout.contains("-line2"));
+    }
+
+    #[tokio::test]
+    async fn test_brief_mode_long_flag() {
+        let ctx = make_ctx_with_files(
+            vec!["--brief", "a.txt", "b.txt"],
+            "",
+            vec![("/a.txt", "aaa\n"), ("/b.txt", "bbb\n")],
+        ).await;
+        let result = DiffCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 1);
+        assert_eq!(result.stdout, "Files a.txt and b.txt differ\n");
+    }
+
+    #[tokio::test]
+    async fn test_brief_mode_identical_files() {
+        let ctx = make_ctx_with_files(
+            vec!["-q", "a.txt", "b.txt"],
+            "",
+            vec![("/a.txt", "same\n"), ("/b.txt", "same\n")],
+        ).await;
+        let result = DiffCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "");
+    }
+
+    #[tokio::test]
+    async fn test_report_identical_long_flag() {
+        let ctx = make_ctx_with_files(
+            vec!["--report-identical-files", "a.txt", "b.txt"],
+            "",
+            vec![("/a.txt", "same\n"), ("/b.txt", "same\n")],
+        ).await;
+        let result = DiffCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "Files a.txt and b.txt are identical\n");
+    }
+
+    #[tokio::test]
+    async fn test_ignore_case_long_flag() {
+        let ctx = make_ctx_with_files(
+            vec!["--ignore-case", "a.txt", "b.txt"],
+            "",
+            vec![("/a.txt", "Hello World\n"), ("/b.txt", "hello world\n")],
+        ).await;
+        let result = DiffCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "");
+    }
+
+    #[tokio::test]
+    async fn test_ignore_case_shows_diff_without_flag() {
+        let ctx = make_ctx_with_files(
+            vec!["a.txt", "b.txt"],
+            "",
+            vec![("/a.txt", "Hello\n"), ("/b.txt", "hello\n")],
+        ).await;
+        let result = DiffCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 1);
+        assert!(result.stdout.contains("-Hello"));
+        assert!(result.stdout.contains("+hello"));
+    }
+
+    #[tokio::test]
+    async fn test_stdin_as_file2() {
+        let ctx = make_ctx_with_files(
+            vec!["a.txt", "-"],
+            "hello\nrust\n",
+            vec![("/a.txt", "hello\nworld\n")],
+        ).await;
+        let result = DiffCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 1);
+        assert!(result.stdout.contains("--- a.txt"));
+        assert!(result.stdout.contains("+++ -"));
+    }
+
+    #[tokio::test]
+    async fn test_missing_first_file() {
+        let ctx = make_ctx_with_files(
+            vec!["nonexistent.txt", "b.txt"],
+            "",
+            vec![("/b.txt", "hello\n")],
+        ).await;
+        let result = DiffCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 2);
+        assert!(result.stderr.contains("nonexistent.txt"));
+        assert!(result.stderr.contains("No such file or directory"));
+    }
+
+    #[tokio::test]
+    async fn test_multiline_changes() {
+        let ctx = make_ctx_with_files(
+            vec!["a.txt", "b.txt"],
+            "",
+            vec![
+                ("/a.txt", "line1\nline2\nline3\n"),
+                ("/b.txt", "line1\nmodified\nline3\n"),
+            ],
+        ).await;
+        let result = DiffCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 1);
+        assert!(result.stdout.contains("-line2"));
+        assert!(result.stdout.contains("+modified"));
+    }
+
+    #[tokio::test]
+    async fn test_context_around_changes() {
+        let ctx = make_ctx_with_files(
+            vec!["a.txt", "b.txt"],
+            "",
+            vec![
+                ("/a.txt", "1\n2\n3\n4\n5\n"),
+                ("/b.txt", "1\n2\nX\n4\n5\n"),
+            ],
+        ).await;
+        let result = DiffCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 1);
+        assert!(result.stdout.contains("@@"));
+        assert!(result.stdout.contains("-3"));
+        assert!(result.stdout.contains("+X"));
+    }
+
+    #[tokio::test]
+    async fn test_empty_vs_nonempty() {
+        let ctx = make_ctx_with_files(
+            vec!["empty.txt", "content.txt"],
+            "",
+            vec![("/empty.txt", ""), ("/content.txt", "has content\n")],
+        ).await;
+        let result = DiffCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 1);
+        assert!(result.stdout.contains("+has content"));
+    }
+
+    #[tokio::test]
+    async fn test_both_empty_files() {
+        let ctx = make_ctx_with_files(
+            vec!["a.txt", "b.txt"],
+            "",
+            vec![("/a.txt", ""), ("/b.txt", "")],
+        ).await;
+        let result = DiffCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "");
+    }
+
+    #[tokio::test]
+    async fn test_unified_flag_accepted() {
+        let ctx = make_ctx_with_files(
+            vec!["-u", "a.txt", "b.txt"],
+            "",
+            vec![("/a.txt", "hello\n"), ("/b.txt", "world\n")],
+        ).await;
+        let result = DiffCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 1);
+        assert!(result.stdout.contains("---"));
+        assert!(result.stdout.contains("+++"));
+    }
 }

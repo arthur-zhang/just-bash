@@ -231,4 +231,151 @@ mod tests {
         let result = cmd.execute(ctx).await;
         assert!(result.stdout.contains("total"));
     }
+
+    #[tokio::test]
+    async fn test_wc_words_only() {
+        let ctx = make_ctx_with_files(
+            vec!["-w", "/test.txt"],
+            vec![("/test.txt", "one two three four\n")],
+        ).await;
+        let cmd = WcCommand;
+        let result = cmd.execute(ctx).await;
+        assert!(result.stdout.trim().ends_with("4 /test.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_wc_chars_only() {
+        let ctx = make_ctx_with_files(
+            vec!["-c", "/test.txt"],
+            vec![("/test.txt", "hello\n")],
+        ).await;
+        let cmd = WcCommand;
+        let result = cmd.execute(ctx).await;
+        assert!(result.stdout.trim().ends_with("6 /test.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_wc_chars_m_flag() {
+        let ctx = make_ctx_with_files(
+            vec!["-m", "/test.txt"],
+            vec![("/test.txt", "hello\n")],
+        ).await;
+        let cmd = WcCommand;
+        let result = cmd.execute(ctx).await;
+        assert!(result.stdout.trim().ends_with("6 /test.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_wc_combined_lw() {
+        let ctx = make_ctx_with_files(
+            vec!["-lw", "/test.txt"],
+            vec![("/test.txt", "one two\nthree\n")],
+        ).await;
+        let cmd = WcCommand;
+        let result = cmd.execute(ctx).await;
+        assert!(result.stdout.contains("2")); // 2 lines
+        assert!(result.stdout.contains("3")); // 3 words
+        assert!(result.stdout.contains("/test.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_wc_from_stdin() {
+        let fs = Arc::new(InMemoryFs::new());
+        let ctx = CommandContext {
+            args: vec!["-w".to_string()],
+            stdin: "hello world\n".to_string(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs,
+            exec_fn: None,
+            fetch_fn: None,
+        };
+        let cmd = WcCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.stdout.trim(), "2");
+    }
+
+    #[tokio::test]
+    async fn test_wc_empty_file() {
+        let ctx = make_ctx_with_files(
+            vec!["/empty.txt"],
+            vec![("/empty.txt", "")],
+        ).await;
+        let cmd = WcCommand;
+        let result = cmd.execute(ctx).await;
+        assert!(result.stdout.contains("0"));
+    }
+
+    #[tokio::test]
+    async fn test_wc_missing_file() {
+        let fs = Arc::new(InMemoryFs::new());
+        let ctx = CommandContext {
+            args: vec!["/missing.txt".to_string()],
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs,
+            exec_fn: None,
+            fetch_fn: None,
+        };
+        let cmd = WcCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 1);
+        assert!(result.stderr.contains("No such file or directory"));
+    }
+
+    #[tokio::test]
+    async fn test_wc_long_lines() {
+        let ctx = make_ctx_with_files(
+            vec!["--lines", "/test.txt"],
+            vec![("/test.txt", "a\nb\n")],
+        ).await;
+        let cmd = WcCommand;
+        let result = cmd.execute(ctx).await;
+        assert!(result.stdout.trim().ends_with("2 /test.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_wc_long_words() {
+        let ctx = make_ctx_with_files(
+            vec!["--words", "/test.txt"],
+            vec![("/test.txt", "one two\n")],
+        ).await;
+        let cmd = WcCommand;
+        let result = cmd.execute(ctx).await;
+        assert!(result.stdout.trim().ends_with("2 /test.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_wc_long_bytes() {
+        let ctx = make_ctx_with_files(
+            vec!["--bytes", "/test.txt"],
+            vec![("/test.txt", "hi\n")],
+        ).await;
+        let cmd = WcCommand;
+        let result = cmd.execute(ctx).await;
+        assert!(result.stdout.trim().ends_with("3 /test.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_wc_lines_with_newline() {
+        let ctx = make_ctx_with_files(
+            vec!["-l", "/test.txt"],
+            vec![("/test.txt", "line1\nline2\n")],
+        ).await;
+        let cmd = WcCommand;
+        let result = cmd.execute(ctx).await;
+        assert!(result.stdout.trim().ends_with("2 /test.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_wc_multiple_spaces() {
+        let ctx = make_ctx_with_files(
+            vec!["-w", "/test.txt"],
+            vec![("/test.txt", "one   two    three\n")],
+        ).await;
+        let cmd = WcCommand;
+        let result = cmd.execute(ctx).await;
+        assert!(result.stdout.trim().ends_with("3 /test.txt"));
+    }
 }

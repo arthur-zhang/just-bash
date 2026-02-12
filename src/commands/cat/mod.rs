@@ -181,4 +181,176 @@ mod tests {
         assert_eq!(result.stdout, "from stdin\n");
         assert_eq!(result.exit_code, 0);
     }
+
+    #[tokio::test]
+    async fn test_cat_file_with_newline() {
+        let ctx = make_ctx_with_files(
+            vec!["/test.txt"],
+            vec![("/test.txt", "hello world\n")],
+        ).await;
+        let cmd = CatCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.stdout, "hello world\n");
+        assert_eq!(result.stderr, "");
+        assert_eq!(result.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_cat_three_files() {
+        let ctx = make_ctx_with_files(
+            vec!["/a.txt", "/b.txt", "/c.txt"],
+            vec![("/a.txt", "A"), ("/b.txt", "B"), ("/c.txt", "C")],
+        ).await;
+        let cmd = CatCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.stdout, "ABC");
+        assert_eq!(result.stderr, "");
+        assert_eq!(result.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_cat_line_numbers_padded() {
+        let ctx = make_ctx_with_files(
+            vec!["-n", "/test.txt"],
+            vec![("/test.txt", "a\n")],
+        ).await;
+        let cmd = CatCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.stdout, "     1\ta\n");
+        assert_eq!(result.stderr, "");
+        assert_eq!(result.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_cat_continue_after_missing_file() {
+        let ctx = make_ctx_with_files(
+            vec!["/missing.txt", "/exists.txt"],
+            vec![("/exists.txt", "content")],
+        ).await;
+        let cmd = CatCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.stdout, "content");
+        assert!(result.stderr.contains("No such file or directory"));
+        assert_eq!(result.exit_code, 1);
+    }
+
+    #[tokio::test]
+    async fn test_cat_empty_file() {
+        let ctx = make_ctx_with_files(
+            vec!["/empty.txt"],
+            vec![("/empty.txt", "")],
+        ).await;
+        let cmd = CatCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.stdout, "");
+        assert_eq!(result.stderr, "");
+        assert_eq!(result.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_cat_special_characters() {
+        let ctx = make_ctx_with_files(
+            vec!["/special.txt"],
+            vec![("/special.txt", "tab:\there\nnewline above")],
+        ).await;
+        let cmd = CatCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.stdout, "tab:\there\nnewline above");
+        assert_eq!(result.stderr, "");
+        assert_eq!(result.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_cat_relative_path() {
+        let fs = Arc::new(InMemoryFs::new());
+        fs.mkdir("/home", &crate::fs::MkdirOptions { recursive: false }).await.unwrap();
+        fs.mkdir("/home/user", &crate::fs::MkdirOptions { recursive: false }).await.unwrap();
+        fs.write_file("/home/user/file.txt", b"content").await.unwrap();
+        let ctx = CommandContext {
+            args: vec!["file.txt".to_string()],
+            stdin: String::new(),
+            cwd: "/home/user".to_string(),
+            env: HashMap::new(),
+            fs,
+            exec_fn: None,
+            fetch_fn: None,
+        };
+        let cmd = CatCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.stdout, "content");
+        assert_eq!(result.stderr, "");
+        assert_eq!(result.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_cat_stdin_with_file() {
+        let fs = Arc::new(InMemoryFs::new());
+        fs.write_file("/file.txt", b"from file\n").await.unwrap();
+        let ctx = CommandContext {
+            args: vec!["-".to_string(), "/file.txt".to_string()],
+            stdin: "from stdin\n".to_string(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs,
+            exec_fn: None,
+            fetch_fn: None,
+        };
+        let cmd = CatCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.stdout, "from stdin\nfrom file\n");
+        assert_eq!(result.stderr, "");
+        assert_eq!(result.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_cat_file_with_stdin() {
+        let fs = Arc::new(InMemoryFs::new());
+        fs.write_file("/file.txt", b"from file\n").await.unwrap();
+        let ctx = CommandContext {
+            args: vec!["/file.txt".to_string(), "-".to_string()],
+            stdin: "from stdin\n".to_string(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs,
+            exec_fn: None,
+            fetch_fn: None,
+        };
+        let cmd = CatCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.stdout, "from file\nfrom stdin\n");
+        assert_eq!(result.stderr, "");
+        assert_eq!(result.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_cat_stdin_with_line_numbers() {
+        let fs = Arc::new(InMemoryFs::new());
+        fs.write_file("/file.txt", b"line1\n").await.unwrap();
+        let ctx = CommandContext {
+            args: vec!["-n".to_string(), "/file.txt".to_string(), "-".to_string()],
+            stdin: "line2\n".to_string(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs,
+            exec_fn: None,
+            fetch_fn: None,
+        };
+        let cmd = CatCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.stdout, "     1\tline1\n     2\tline2\n");
+        assert_eq!(result.stderr, "");
+        assert_eq!(result.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_cat_number_flag_long() {
+        let ctx = make_ctx_with_files(
+            vec!["--number", "/test.txt"],
+            vec![("/test.txt", "line1\nline2\n")],
+        ).await;
+        let cmd = CatCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.stdout, "     1\tline1\n     2\tline2\n");
+        assert_eq!(result.exit_code, 0);
+    }
 }

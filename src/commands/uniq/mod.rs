@@ -263,4 +263,26 @@ mod tests {
         let result = UniqCommand.execute(ctx).await;
         assert_ne!(result.exit_code, 0);
     }
+
+    #[tokio::test]
+    async fn test_count_format() {
+        let ctx = make_ctx(
+            vec!["-c", "/test.txt"],
+            "",
+            vec![("/test.txt", "apple\napple\nbanana\nbanana\nbanana\ncherry\n")],
+        )
+        .await;
+        let result = UniqCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "      2 apple\n      3 banana\n      1 cherry\n");
+    }
+
+    #[tokio::test]
+    async fn test_help() {
+        let ctx = make_ctx(vec!["--help"], "", vec![]).await;
+        let result = UniqCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("Usage"));
+        assert!(result.stdout.contains("--count"));
+    }
 }

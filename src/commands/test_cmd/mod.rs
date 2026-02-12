@@ -346,4 +346,149 @@ mod tests {
         let result = cmd.execute(ctx).await;
         assert_eq!(result.exit_code, 0);
     }
+
+    #[tokio::test]
+    async fn test_single_arg_empty() {
+        let ctx = make_ctx(vec![""]);
+        let cmd = TestCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 1);
+    }
+
+    #[tokio::test]
+    async fn test_z_nonempty() {
+        let ctx = make_ctx(vec!["-z", "hello"]);
+        let cmd = TestCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 1);
+    }
+
+    #[tokio::test]
+    async fn test_n_empty() {
+        let ctx = make_ctx(vec!["-n", ""]);
+        let cmd = TestCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 1);
+    }
+
+    #[tokio::test]
+    async fn test_is_directory() {
+        let ctx = make_ctx_with_files(vec!["-d", "/dir"], vec![("/dir/file.txt", "content")]).await;
+        let cmd = TestCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_is_not_directory() {
+        let ctx = make_ctx_with_files(vec!["-d", "/file.txt"], vec![("/file.txt", "content")]).await;
+        let cmd = TestCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 1);
+    }
+
+    #[tokio::test]
+    async fn test_file_size_nonempty() {
+        let ctx = make_ctx_with_files(vec!["-s", "/file.txt"], vec![("/file.txt", "content")]).await;
+        let cmd = TestCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_file_size_empty() {
+        let ctx = make_ctx_with_files(vec!["-s", "/empty.txt"], vec![("/empty.txt", "")]).await;
+        let cmd = TestCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 1);
+    }
+
+    #[tokio::test]
+    async fn test_numeric_ne() {
+        let ctx = make_ctx(vec!["5", "-ne", "6"]);
+        let cmd = TestCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_numeric_le() {
+        let ctx = make_ctx(vec!["5", "-le", "5"]);
+        let cmd = TestCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_numeric_gt() {
+        let ctx = make_ctx(vec!["5", "-gt", "3"]);
+        let cmd = TestCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_numeric_ge() {
+        let ctx = make_ctx(vec!["5", "-ge", "5"]);
+        let cmd = TestCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_and_both_false() {
+        let ctx = make_ctx(vec!["-z", "a", "-a", "-z", "b"]);
+        let cmd = TestCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 1);
+    }
+
+    #[tokio::test]
+    async fn test_or_both_false() {
+        let ctx = make_ctx(vec!["-f", "/nonexistent1", "-o", "-f", "/nonexistent2"]);
+        let cmd = TestCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 1);
+    }
+
+    #[tokio::test]
+    async fn test_bracket_with_closing() {
+        let ctx = make_ctx(vec!["[", "-n", "hello", "]"]);
+        let cmd = TestCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_bracket_missing_closing() {
+        let ctx = make_ctx(vec!["[", "-n", "hello"]);
+        let cmd = TestCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 1);
+        assert!(result.stderr.contains("missing ']'"));
+    }
+
+    #[tokio::test]
+    async fn test_bracket_command_with_closing() {
+        let ctx = make_ctx(vec!["-f", "/file.txt", "]"]);
+        let cmd = BracketCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 1);
+    }
+
+    #[tokio::test]
+    async fn test_bracket_command_missing_closing() {
+        let ctx = make_ctx(vec!["-f", "/file.txt"]);
+        let cmd = BracketCommand;
+        let result = cmd.execute(ctx).await;
+        assert!(result.stderr.contains("missing ']'"));
+    }
+
+    #[tokio::test]
+    async fn test_bracket_empty() {
+        let ctx = make_ctx(vec!["]"]);
+        let cmd = BracketCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 1);
+    }
 }

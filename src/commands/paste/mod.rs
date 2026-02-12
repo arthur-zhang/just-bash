@@ -267,4 +267,78 @@ mod tests {
         assert_eq!(result.exit_code, 0);
         assert_eq!(result.stdout, "1:a,x\n2:b,y\n");
     }
+
+    #[tokio::test]
+    async fn test_paste_single_file() {
+        let ctx = make_ctx(
+            vec!["/a.txt"],
+            "",
+            vec![("/a.txt", "a\nb\nc\n")],
+        )
+        .await;
+        let result = PasteCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "a\nb\nc\n");
+    }
+
+    #[tokio::test]
+    async fn test_paste_empty_file() {
+        let ctx = make_ctx(
+            vec!["/empty.txt", "/a.txt"],
+            "",
+            vec![("/empty.txt", ""), ("/a.txt", "a\nb\nc\n")],
+        )
+        .await;
+        let result = PasteCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "\ta\n\tb\n\tc\n");
+    }
+
+    #[tokio::test]
+    async fn test_paste_serial_with_delimiter() {
+        let ctx = make_ctx(
+            vec!["-s", "-d,", "/a.txt"],
+            "",
+            vec![("/a.txt", "a\nb\nc\n")],
+        )
+        .await;
+        let result = PasteCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "a,b,c\n");
+    }
+
+    #[tokio::test]
+    async fn test_paste_combined_options() {
+        let ctx = make_ctx(
+            vec!["-s", "-d,", "/a.txt"],
+            "",
+            vec![("/a.txt", "a\nb\nc\n")],
+        )
+        .await;
+        let result = PasteCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "a,b,c\n");
+    }
+
+    #[tokio::test]
+    async fn test_paste_space_delimiter() {
+        let ctx = make_ctx(
+            vec!["-d", " ", "/a.txt", "/b.txt"],
+            "",
+            vec![("/a.txt", "a\nb\nc\n"), ("/b.txt", "1\n2\n3\n")],
+        )
+        .await;
+        let result = PasteCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "a 1\nb 2\nc 3\n");
+    }
+
+    #[tokio::test]
+    async fn test_paste_help() {
+        let ctx = make_ctx(vec!["--help"], "", vec![]).await;
+        let result = PasteCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("Usage"));
+        assert!(result.stdout.contains("--delimiters"));
+    }
 }

@@ -1093,4 +1093,262 @@ mod tests {
         let data = vec![0x1f, 0x8b, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00];
         assert_eq!(get_uncompressed_size(&data), 11);
     }
+
+    #[tokio::test]
+    async fn test_compress_and_remove_original() {
+        let ctx = make_ctx_str(vec!["/test.txt"], "", vec![("/test.txt", "Hello, World!")]).await;
+        let fs = ctx.fs.clone();
+        let result = GzipCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        // Original should be removed
+        assert!(!fs.exists("/test.txt").await);
+        assert!(fs.exists("/test.txt.gz").await);
+    }
+
+    #[tokio::test]
+    async fn test_refuse_overwrite_existing_gz_file() {
+        let compressed = compress_bytes(b"existing");
+        let ctx = make_ctx(
+            vec!["/test.txt"],
+            "",
+            vec![("/test.txt", b"Hello, World!"), ("/test.txt.gz", &compressed)],
+        ).await;
+        let result = GzipCommand.execute(ctx).await;
+        assert_ne!(result.exit_code, 0);
+        assert!(result.stderr.contains("already exists"));
+    }
+
+    #[tokio::test]
+    async fn test_skip_files_with_gz_suffix() {
+        let ctx = make_ctx_str(vec!["/test.txt.gz"], "", vec![("/test.txt.gz", "already compressed")]).await;
+        let result = GzipCommand.execute(ctx).await;
+        assert_ne!(result.exit_code, 0);
+        assert!(result.stderr.contains("already has .gz suffix"));
+    }
+
+    #[tokio::test]
+    async fn test_compress_multiple_files() {
+        let ctx = make_ctx_str(
+            vec!["/a.txt", "/b.txt"],
+            "",
+            vec![("/a.txt", "File A"), ("/b.txt", "File B")],
+        ).await;
+        let fs = ctx.fs.clone();
+        let result = GzipCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(fs.exists("/a.txt.gz").await);
+        assert!(fs.exists("/b.txt.gz").await);
+    }
+
+    #[tokio::test]
+    async fn test_custom_suffix_with_s_flag() {
+        let ctx = make_ctx_str(vec!["-S", ".z", "/test.txt"], "", vec![("/test.txt", "Hello, World!")]).await;
+        let fs = ctx.fs.clone();
+        let result = GzipCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(fs.exists("/test.txt.z").await);
+    }
+
+    #[tokio::test]
+    async fn test_decompress_with_d_flag() {
+        let original = b"Hello, World!";
+        let compressed = compress_bytes(original);
+        let ctx = make_ctx(vec!["-d", "/test.txt.gz"], "", vec![("/test.txt.gz", &compressed)]).await;
+        let fs = ctx.fs.clone();
+        let result = GzipCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        let content = fs.read_file_buffer("/test.txt").await.unwrap();
+        assert_eq!(content, original);
+    }
+
+    #[tokio::test]
+    async fn test_refuse_decompress_without_gz_suffix() {
+        let ctx = make_ctx_str(vec!["-d", "/test.txt"], "", vec![("/test.txt", "not compressed")]).await;
+        let result = GzipCommand.execute(ctx).await;
+        assert_ne!(result.exit_code, 0);
+        assert!(result.stderr.contains("unknown suffix"));
+    }
+
+    #[tokio::test]
+    async fn test_detect_non_gzip_files() {
+        let ctx = make_ctx_str(vec!["-d", "/test.txt.gz"], "", vec![("/test.txt.gz", "not actually gzip")]).await;
+        let result = GzipCommand.execute(ctx).await;
+        assert_ne!(result.exit_code, 0);
+        assert!(result.stderr.contains("not in gzip format"));
+    }
+
+    #[tokio::test]
+    async fn test_compression_levels_1_through_9() {
+        for level in 1..=9 {
+            let ctx = make_ctx_str(vec![&format!("-{}", level), "-k", "/test.txt"], "", vec![("/test.txt", "Hello, World!")]).await;
+            let result = GzipCommand.execute(ctx).await;
+            assert_eq!(result.exit_code, 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_fast_and_best_flags() {
+        let ctx1 = make_ctx_str(vec!["--fast", "-k", "/test.txt"], "", vec![("/test.txt", "Hello, World!")]).await;
+        let result1 = GzipCommand.execute(ctx1).await;
+        assert_eq!(result1.exit_code, 0);
+
+        let ctx2 = make_ctx_str(vec!["--best", "-k", "/test.txt"], "", vec![("/test.txt", "Hello, World!")]).await;
+        let result2 = GzipCommand.execute(ctx2).await;
+        assert_eq!(result2.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_read_from_stdin_no_file() {
+        let ctx = make_ctx(vec![], "Hello", vec![]).await;
+        let result = GzipCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        let bytes = decode_binary_stdout(&result.stdout);
+        assert!(is_gzip(&bytes));
+    }
+
+    #[tokio::test]
+    async fn test_read_from_stdin_with_dash() {
+        let ctx = make_ctx(vec!["-"], "Hello", vec![]).await;
+        let result = GzipCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        let bytes = decode_binary_stdout(&result.stdout);
+        assert!(is_gzip(&bytes));
+    }
+
+    #[tokio::test]
+    async fn test_list_compressed_file_info() {
+        let original = b"Hello, World! This is a test.";
+        let compressed = compress_bytes(original);
+        let ctx = make_ctx(vec!["-l", "/test.txt.gz"], "", vec![("/test.txt.gz", &compressed)]).await;
+        let result = GzipCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("compressed"));
+        assert!(result.stdout.contains("uncompressed"));
+        assert!(result.stdout.contains("%"));
+    }
+
+    #[tokio::test]
+    async fn test_test_valid_gzip_file() {
+        let compressed = compress_bytes(b"Hello, World!");
+        let ctx = make_ctx(vec!["-t", "/test.txt.gz"], "", vec![("/test.txt.gz", &compressed)]).await;
+        let result = GzipCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_test_with_verbose_shows_ok() {
+        let compressed = compress_bytes(b"Hello, World!");
+        let ctx = make_ctx(vec!["-tv", "/test.txt.gz"], "", vec![("/test.txt.gz", &compressed)]).await;
+        let result = GzipCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stderr.contains("OK"));
+    }
+
+    #[tokio::test]
+    async fn test_test_detects_corrupted_file() {
+        let ctx = make_ctx_str(vec!["-t", "/corrupt.gz"], "", vec![("/corrupt.gz", "not valid gzip data")]).await;
+        let result = GzipCommand.execute(ctx).await;
+        assert_ne!(result.exit_code, 0);
+        assert!(result.stderr.contains("not in gzip format"));
+    }
+
+    #[tokio::test]
+    async fn test_quiet_suppresses_warnings() {
+        let ctx = make_ctx_str(vec!["-qd", "/test.txt.gz"], "", vec![("/test.txt.gz", "not valid")]).await;
+        let result = GzipCommand.execute(ctx).await;
+        assert_ne!(result.exit_code, 0);
+        assert_eq!(result.stderr, "");
+    }
+
+    #[tokio::test]
+    async fn test_gunzip_decompresses_by_default() {
+        let original = b"Hello, World!";
+        let compressed = compress_bytes(original);
+        let ctx = make_ctx(vec!["/test.txt.gz"], "", vec![("/test.txt.gz", &compressed)]).await;
+        let fs = ctx.fs.clone();
+        let result = GunzipCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        let content = fs.read_file_buffer("/test.txt").await.unwrap();
+        assert_eq!(content, original);
+    }
+
+    #[tokio::test]
+    async fn test_gunzip_with_c_writes_to_stdout() {
+        let original = b"Hello, World!";
+        let compressed = compress_bytes(original);
+        let ctx = make_ctx(vec!["-c", "/test.txt.gz"], "", vec![("/test.txt.gz", &compressed)]).await;
+        let fs = ctx.fs.clone();
+        let result = GunzipCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        let out_bytes = decode_binary_stdout(&result.stdout);
+        assert_eq!(out_bytes, original);
+        // Original .gz should still exist
+        assert!(fs.exists("/test.txt.gz").await);
+    }
+
+    #[tokio::test]
+    async fn test_zcat_outputs_to_stdout() {
+        let original = b"Hello, World!";
+        let compressed = compress_bytes(original);
+        let ctx = make_ctx(vec!["/test.txt.gz"], "", vec![("/test.txt.gz", &compressed)]).await;
+        let fs = ctx.fs.clone();
+        let result = ZcatCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        let out_bytes = decode_binary_stdout(&result.stdout);
+        assert_eq!(out_bytes, original);
+        // Original .gz should still exist
+        assert!(fs.exists("/test.txt.gz").await);
+    }
+
+    #[tokio::test]
+    async fn test_zcat_handles_multiple_files() {
+        let compressed_a = compress_bytes(b"File A\n");
+        let compressed_b = compress_bytes(b"File B\n");
+        let ctx = make_ctx(
+            vec!["/a.txt.gz", "/b.txt.gz"],
+            "",
+            vec![("/a.txt.gz", &compressed_a), ("/b.txt.gz", &compressed_b)],
+        ).await;
+        let result = ZcatCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        let out_bytes = decode_binary_stdout(&result.stdout);
+        assert_eq!(String::from_utf8(out_bytes).unwrap(), "File A\nFile B\n");
+    }
+
+    #[tokio::test]
+    async fn test_error_on_nonexistent_file() {
+        let ctx = make_ctx(vec!["/nonexistent.txt"], "", vec![]).await;
+        let result = GzipCommand.execute(ctx).await;
+        assert_ne!(result.exit_code, 0);
+        assert!(result.stderr.contains("No such file or directory"));
+    }
+
+    #[tokio::test]
+    async fn test_error_on_unknown_option() {
+        let ctx = make_ctx(vec!["--unknown"], "", vec![]).await;
+        let result = GzipCommand.execute(ctx).await;
+        assert_ne!(result.exit_code, 0);
+        assert!(result.stderr.contains("unrecognized option"));
+    }
+
+    #[tokio::test]
+    async fn test_ignore_directory_without_r() {
+        let fs = Arc::new(InMemoryFs::new());
+        use crate::fs::types::MkdirOptions;
+        fs.mkdir("/dir", &MkdirOptions { recursive: true }).await.unwrap();
+        fs.write_file("/dir/file.txt", b"content").await.unwrap();
+
+        let ctx = CommandContext {
+            args: vec!["/dir".to_string()],
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: fs.clone(),
+            exec_fn: None,
+            fetch_fn: None,
+        };
+        let result = GzipCommand.execute(ctx).await;
+        assert_ne!(result.exit_code, 0);
+        assert!(result.stderr.contains("is a directory"));
+    }
 }

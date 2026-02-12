@@ -425,4 +425,110 @@ mod tests {
         assert_eq!(result.exit_code, 0);
         assert_eq!(result.stdout, "grep -l pattern a.txt b.txt\n");
     }
+
+    #[tokio::test]
+    async fn test_xargs_delimiter_tab() {
+        let ctx = make_ctx(vec!["-d", "\\t"], "a\tb\tc\n");
+        let result = XargsCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "echo a b c\n");
+    }
+
+    #[tokio::test]
+    async fn test_xargs_delimiter_with_batch() {
+        let ctx = make_ctx(vec!["-d", ":", "-n", "2"], "a:b:c:d:e\n");
+        let result = XargsCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "echo a b\necho c d\necho e\n");
+    }
+
+    #[tokio::test]
+    async fn test_xargs_delimiter_with_replace() {
+        let ctx = make_ctx(vec!["-d", ":", "-I", "{}", "echo", "item: {}"], "x:y:z\n");
+        let result = XargsCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "echo \"item: x\"\necho \"item: y\"\necho \"item: z\"\n");
+    }
+
+    #[tokio::test]
+    async fn test_xargs_delimiter_preserves_spaces() {
+        let ctx = make_ctx(vec!["-d", ":", "-n", "1"], "hello world:foo bar:test\n");
+        let result = XargsCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "echo \"hello world\"\necho \"foo bar\"\necho test\n");
+    }
+
+    #[tokio::test]
+    async fn test_xargs_delimiter_empty_items() {
+        let ctx = make_ctx(vec!["-d", ":"], "a::b\n");
+        let result = XargsCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "echo a b\n");
+    }
+
+    #[tokio::test]
+    async fn test_xargs_delimiter_backslash() {
+        let ctx = make_ctx(vec!["-d", "\\\\"], "a\\b\\c\n");
+        let result = XargsCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "echo a b c\n");
+    }
+
+    #[tokio::test]
+    async fn test_xargs_batch_n1() {
+        let ctx = make_ctx(vec!["-n", "1"], "a b c\n");
+        let result = XargsCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "echo a\necho b\necho c\n");
+    }
+
+    #[tokio::test]
+    async fn test_xargs_batch_partial() {
+        let ctx = make_ctx(vec!["-n", "2"], "a b c\n");
+        let result = XargsCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "echo a b\necho c\n");
+    }
+
+    #[tokio::test]
+    async fn test_xargs_replace_multiple_in_line() {
+        let ctx = make_ctx(vec!["-I", "%", "echo", "%-%"], "x\n");
+        let result = XargsCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "echo x-x\n");
+    }
+
+    #[tokio::test]
+    async fn test_xargs_verbose_with_batch() {
+        let ctx = make_ctx(vec!["-t", "-n", "1"], "a b\n");
+        let result = XargsCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "echo a\necho b\n");
+        assert_eq!(result.stderr, "echo a\necho b\n");
+    }
+
+    #[tokio::test]
+    async fn test_xargs_help() {
+        let ctx = make_ctx(vec!["--help"], "");
+        let result = XargsCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("xargs"));
+        assert!(result.stdout.contains("Build and execute"));
+    }
+
+    #[tokio::test]
+    async fn test_xargs_empty_stdin_whitespace() {
+        let ctx = make_ctx(vec![], "   \n  \n");
+        let result = XargsCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "");
+    }
+
+    #[tokio::test]
+    async fn test_xargs_single_item() {
+        let ctx = make_ctx(vec![], "single\n");
+        let result = XargsCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "echo single\n");
+    }
 }

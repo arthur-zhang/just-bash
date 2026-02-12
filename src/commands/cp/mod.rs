@@ -206,4 +206,221 @@ mod tests {
         let content = fs.read_file("/dest.txt").await.unwrap();
         assert_eq!(content, "old"); // 未被覆盖
     }
+
+    #[tokio::test]
+    async fn test_cp_preserve_original() {
+        let ctx = make_ctx_with_files(
+            vec!["/src.txt", "/dest.txt"],
+            vec![("/src.txt", "content")],
+        ).await;
+        let fs = ctx.fs.clone();
+        let cmd = CpCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        let src_content = fs.read_file("/src.txt").await.unwrap();
+        assert_eq!(src_content, "content");
+    }
+
+    #[tokio::test]
+    async fn test_cp_overwrite_existing() {
+        let ctx = make_ctx_with_files(
+            vec!["/src.txt", "/dest.txt"],
+            vec![("/src.txt", "new content"), ("/dest.txt", "old content")],
+        ).await;
+        let fs = ctx.fs.clone();
+        let cmd = CpCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        let content = fs.read_file("/dest.txt").await.unwrap();
+        assert_eq!(content, "new content");
+    }
+
+    #[tokio::test]
+    async fn test_cp_multiple_files_to_directory() {
+        let fs = Arc::new(InMemoryFs::new());
+        fs.write_file("/a.txt", b"aaa").await.unwrap();
+        fs.write_file("/b.txt", b"bbb").await.unwrap();
+        fs.mkdir("/dir", &crate::fs::MkdirOptions { recursive: false }).await.unwrap();
+        let ctx = CommandContext {
+            args: vec!["/a.txt".to_string(), "/b.txt".to_string(), "/dir".to_string()],
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: fs.clone(),
+            exec_fn: None,
+            fetch_fn: None,
+        };
+        let cmd = CpCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(fs.read_file("/dir/a.txt").await.unwrap(), "aaa");
+        assert_eq!(fs.read_file("/dir/b.txt").await.unwrap(), "bbb");
+    }
+
+    #[tokio::test]
+    async fn test_cp_multiple_files_to_non_directory() {
+        let ctx = make_ctx_with_files(
+            vec!["/a.txt", "/b.txt", "/nonexistent"],
+            vec![("/a.txt", ""), ("/b.txt", "")],
+        ).await;
+        let cmd = CpCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 1);
+        assert!(result.stderr.contains("not a directory"));
+    }
+
+    #[tokio::test]
+    async fn test_cp_directory_with_recursive() {
+        let fs = Arc::new(InMemoryFs::new());
+        fs.mkdir("/srcdir", &crate::fs::MkdirOptions { recursive: false }).await.unwrap();
+        fs.write_file("/srcdir/file.txt", b"content").await.unwrap();
+        let ctx = CommandContext {
+            args: vec!["-r".to_string(), "/srcdir".to_string(), "/dstdir".to_string()],
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: fs.clone(),
+            exec_fn: None,
+            fetch_fn: None,
+        };
+        let cmd = CpCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        let content = fs.read_file("/dstdir/file.txt").await.unwrap();
+        assert_eq!(content, "content");
+    }
+
+    #[tokio::test]
+    async fn test_cp_directory_with_capital_r() {
+        let fs = Arc::new(InMemoryFs::new());
+        fs.mkdir("/srcdir", &crate::fs::MkdirOptions { recursive: false }).await.unwrap();
+        fs.write_file("/srcdir/file.txt", b"content").await.unwrap();
+        let ctx = CommandContext {
+            args: vec!["-R".to_string(), "/srcdir".to_string(), "/dstdir".to_string()],
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: fs.clone(),
+            exec_fn: None,
+            fetch_fn: None,
+        };
+        let cmd = CpCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(fs.exists("/dstdir/file.txt").await);
+    }
+
+    #[tokio::test]
+    async fn test_cp_nested_directories() {
+        let fs = Arc::new(InMemoryFs::new());
+        fs.mkdir("/src", &crate::fs::MkdirOptions { recursive: true }).await.unwrap();
+        fs.mkdir("/src/a", &crate::fs::MkdirOptions { recursive: true }).await.unwrap();
+        fs.mkdir("/src/a/b", &crate::fs::MkdirOptions { recursive: true }).await.unwrap();
+        fs.write_file("/src/a/b/c.txt", b"deep").await.unwrap();
+        fs.write_file("/src/root.txt", b"root").await.unwrap();
+        let ctx = CommandContext {
+            args: vec!["-r".to_string(), "/src".to_string(), "/dst".to_string()],
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: fs.clone(),
+            exec_fn: None,
+            fetch_fn: None,
+        };
+        let cmd = CpCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(fs.read_file("/dst/a/b/c.txt").await.unwrap(), "deep");
+        assert_eq!(fs.read_file("/dst/root.txt").await.unwrap(), "root");
+    }
+
+    #[tokio::test]
+    async fn test_cp_recursive_long_flag() {
+        let fs = Arc::new(InMemoryFs::new());
+        fs.mkdir("/srcdir", &crate::fs::MkdirOptions { recursive: false }).await.unwrap();
+        fs.write_file("/srcdir/file.txt", b"content").await.unwrap();
+        let ctx = CommandContext {
+            args: vec!["--recursive".to_string(), "/srcdir".to_string(), "/dstdir".to_string()],
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: fs.clone(),
+            exec_fn: None,
+            fetch_fn: None,
+        };
+        let cmd = CpCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(fs.exists("/dstdir/file.txt").await);
+    }
+
+    #[tokio::test]
+    async fn test_cp_missing_source() {
+        let ctx = make_ctx_with_files(vec!["/missing.txt", "/dst.txt"], vec![]).await;
+        let cmd = CpCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 1);
+        assert!(result.stderr.contains("No such file or directory"));
+    }
+
+    #[tokio::test]
+    async fn test_cp_missing_destination() {
+        let ctx = make_ctx_with_files(
+            vec!["/src.txt"],
+            vec![("/src.txt", "")],
+        ).await;
+        let cmd = CpCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 1);
+        assert!(result.stderr.contains("missing destination"));
+    }
+
+    #[tokio::test]
+    async fn test_cp_relative_paths() {
+        let fs = Arc::new(InMemoryFs::new());
+        fs.mkdir("/home", &crate::fs::MkdirOptions { recursive: false }).await.unwrap();
+        fs.mkdir("/home/user", &crate::fs::MkdirOptions { recursive: false }).await.unwrap();
+        fs.write_file("/home/user/src.txt", b"content").await.unwrap();
+        let ctx = CommandContext {
+            args: vec!["src.txt".to_string(), "dst.txt".to_string()],
+            stdin: String::new(),
+            cwd: "/home/user".to_string(),
+            env: HashMap::new(),
+            fs: fs.clone(),
+            exec_fn: None,
+            fetch_fn: None,
+        };
+        let cmd = CpCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        let content = fs.read_file("/home/user/dst.txt").await.unwrap();
+        assert_eq!(content, "content");
+    }
+
+    #[tokio::test]
+    async fn test_cp_verbose() {
+        let ctx = make_ctx_with_files(
+            vec!["-v", "/src.txt", "/dest.txt"],
+            vec![("/src.txt", "content")],
+        ).await;
+        let cmd = CpCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("/src.txt"));
+        assert!(result.stdout.contains("/dest.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_cp_no_clobber_long_flag() {
+        let ctx = make_ctx_with_files(
+            vec!["--no-clobber", "/src.txt", "/dest.txt"],
+            vec![("/src.txt", "new"), ("/dest.txt", "old")],
+        ).await;
+        let fs = ctx.fs.clone();
+        let cmd = CpCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        let content = fs.read_file("/dest.txt").await.unwrap();
+        assert_eq!(content, "old");
+    }
 }

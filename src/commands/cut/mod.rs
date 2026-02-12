@@ -282,6 +282,13 @@ mod tests {
         }
     }
 
+    async fn make_ctx_with_files(
+        args: Vec<&str>,
+        files: Vec<(&str, &str)>,
+    ) -> CommandContext {
+        make_ctx(args, "", files).await
+    }
+
     #[tokio::test]
     async fn test_cut_first_field_colon() {
         let ctx = make_ctx(
@@ -434,5 +441,79 @@ mod tests {
         let result = CutCommand.execute(ctx).await;
         assert_eq!(result.exit_code, 0);
         assert_eq!(result.stdout, "a\nc\n");
+    }
+
+    #[tokio::test]
+    async fn test_cut_from_file() {
+        let ctx = make_ctx_with_files(
+            vec!["-d:", "-f1", "/test/passwd.txt"],
+            vec![("/test/passwd.txt", "root:x:0:0:root:/root:/bin/bash\nuser:x:1000:1000:User:/home/user:/bin/zsh\n")],
+        )
+        .await;
+        let result = CutCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "root\nuser\n");
+    }
+
+    #[tokio::test]
+    async fn test_cut_csv_multiple_fields() {
+        let ctx = make_ctx_with_files(
+            vec!["-d,", "-f1,2", "/test/csv.txt"],
+            vec![("/test/csv.txt", "name,age,city\nJohn,25,NYC\nJane,30,LA\n")],
+        )
+        .await;
+        let result = CutCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "name,age\nJohn,25\nJane,30\n");
+    }
+
+    #[tokio::test]
+    async fn test_cut_field_range_1_3() {
+        let ctx = make_ctx_with_files(
+            vec!["-d:", "-f1-3", "/test/passwd.txt"],
+            vec![("/test/passwd.txt", "root:x:0:0:root:/root:/bin/bash\nuser:x:1000:1000:User:/home/user:/bin/zsh\n")],
+        )
+        .await;
+        let result = CutCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "root:x:0\nuser:x:1000\n");
+    }
+
+    #[tokio::test]
+    async fn test_cut_field_from_end() {
+        let ctx = make_ctx_with_files(
+            vec!["-d:", "-f5-", "/test/passwd.txt"],
+            vec![("/test/passwd.txt", "root:x:0:0:root:/root:/bin/bash\nuser:x:1000:1000:User:/home/user:/bin/zsh\n")],
+        )
+        .await;
+        let result = CutCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "root:/root:/bin/bash\nUser:/home/user:/bin/zsh\n");
+    }
+
+    #[tokio::test]
+    async fn test_cut_error_message() {
+        let ctx = make_ctx_with_files(
+            vec!["-f1", "/test/nonexistent.txt"],
+            vec![],
+        )
+        .await;
+        let result = CutCommand.execute(ctx).await;
+        assert_eq!(result.stdout, "");
+        assert_eq!(result.stderr, "cut: /test/nonexistent.txt: No such file or directory\n");
+        assert_eq!(result.exit_code, 1);
+    }
+
+    #[tokio::test]
+    async fn test_cut_error_no_spec() {
+        let ctx = make_ctx_with_files(
+            vec!["/test/text.txt"],
+            vec![("/test/text.txt", "hello world\n")],
+        )
+        .await;
+        let result = CutCommand.execute(ctx).await;
+        assert_eq!(result.stdout, "");
+        assert_eq!(result.stderr, "cut: you must specify a list of bytes, characters, or fields\n");
+        assert_eq!(result.exit_code, 1);
     }
 }

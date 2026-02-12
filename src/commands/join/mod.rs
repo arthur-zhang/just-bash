@@ -588,4 +588,163 @@ mod tests {
         assert_eq!(result.exit_code, 0);
         assert_eq!(result.stdout, "");
     }
+
+    #[tokio::test]
+    async fn test_join_many_to_many() {
+        let ctx = make_ctx(
+            vec!["/file1.txt", "/file2.txt"],
+            "",
+            vec![
+                ("/file1.txt", "1 a\n1 b\n"),
+                ("/file2.txt", "1 x\n1 y\n"),
+            ],
+        )
+        .await;
+        let result = JoinCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("1 a x"));
+        assert!(result.stdout.contains("1 a y"));
+        assert!(result.stdout.contains("1 b x"));
+        assert!(result.stdout.contains("1 b y"));
+    }
+
+    #[tokio::test]
+    async fn test_join_stdin() {
+        let ctx = make_ctx(
+            vec!["-", "/file2.txt"],
+            "1 apple\n2 banana\n",
+            vec![("/file2.txt", "1 red\n2 yellow\n")],
+        )
+        .await;
+        let result = JoinCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("1 apple red"));
+        assert!(result.stdout.contains("2 banana yellow"));
+    }
+
+    #[tokio::test]
+    async fn test_join_full_outer() {
+        let ctx = make_ctx(
+            vec!["-a", "1", "-a", "2", "/file1.txt", "/file2.txt"],
+            "",
+            vec![
+                ("/file1.txt", "1 apple\n2 banana\n"),
+                ("/file2.txt", "2 yellow\n3 red\n"),
+            ],
+        )
+        .await;
+        let result = JoinCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("1 apple"));
+        assert!(result.stdout.contains("2 banana yellow"));
+        assert!(result.stdout.contains("3 red"));
+    }
+
+    #[tokio::test]
+    async fn test_join_output_format() {
+        let ctx = make_ctx(
+            vec!["-o", "1.2,2.2", "/file1.txt", "/file2.txt"],
+            "",
+            vec![
+                ("/file1.txt", "1 apple red\n2 banana yellow\n"),
+                ("/file2.txt", "1 fruit\n2 fruit\n"),
+            ],
+        )
+        .await;
+        let result = JoinCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("apple fruit"));
+        assert!(result.stdout.contains("banana fruit"));
+    }
+
+    #[tokio::test]
+    async fn test_join_output_format_with_key() {
+        let ctx = make_ctx(
+            vec!["-o", "1.0,1.2,2.2", "/file1.txt", "/file2.txt"],
+            "",
+            vec![
+                ("/file1.txt", "key val1\n"),
+                ("/file2.txt", "key val2\n"),
+            ],
+        )
+        .await;
+        let result = JoinCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("key val1 val2"));
+    }
+
+    #[tokio::test]
+    async fn test_join_colon_separator() {
+        let ctx = make_ctx(
+            vec!["-t", ":", "/file1.txt", "/file2.txt"],
+            "",
+            vec![
+                ("/file1.txt", "user:1000:home\nroot:0:root\n"),
+                ("/file2.txt", "user:active\nroot:active\n"),
+            ],
+        )
+        .await;
+        let result = JoinCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("user:1000:home:active"));
+        assert!(result.stdout.contains("root:0:root:active"));
+    }
+
+    #[tokio::test]
+    async fn test_join_anti_v2() {
+        let ctx = make_ctx(
+            vec!["-v", "2", "/file1.txt", "/file2.txt"],
+            "",
+            vec![
+                ("/file1.txt", "1 apple\n"),
+                ("/file2.txt", "1 red\n2 yellow\n"),
+            ],
+        )
+        .await;
+        let result = JoinCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("2 yellow"));
+        assert!(!result.stdout.contains("1 apple red"));
+    }
+
+    #[tokio::test]
+    async fn test_join_empty_files() {
+        let ctx = make_ctx(
+            vec!["/file1.txt", "/file2.txt"],
+            "",
+            vec![
+                ("/file1.txt", ""),
+                ("/file2.txt", "1 x\n"),
+            ],
+        )
+        .await;
+        let result = JoinCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "");
+    }
+
+    #[tokio::test]
+    async fn test_join_help() {
+        let ctx = make_ctx(vec!["--help"], "", vec![]).await;
+        let result = JoinCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("Usage"));
+        assert!(result.stdout.contains("FILE1 FILE2"));
+    }
+
+    #[tokio::test]
+    async fn test_join_invalid_field_number() {
+        let ctx = make_ctx(
+            vec!["-1", "0", "/file1.txt", "/file2.txt"],
+            "",
+            vec![
+                ("/file1.txt", "a\n"),
+                ("/file2.txt", "b\n"),
+            ],
+        )
+        .await;
+        let result = JoinCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        // Field 0 is valid in join (represents the join key)
+    }
 }

@@ -314,4 +314,29 @@ mod tests {
         assert_eq!(result.exit_code, 0);
         assert_eq!(result.stdout, "elloorld\n");
     }
+
+    #[tokio::test]
+    async fn test_tr_squeeze_spaces() {
+        let ctx = make_ctx(vec!["-s", " "], "hello    world\n");
+        let result = TrCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "hello world\n");
+    }
+
+    #[tokio::test]
+    async fn test_tr_number_range() {
+        let ctx = make_ctx(vec!["1-5", "a-e"], "12345\n");
+        let result = TrCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "abcde\n");
+    }
+
+    #[tokio::test]
+    async fn test_tr_help() {
+        let ctx = make_ctx(vec!["--help"], "");
+        let result = TrCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("Usage"));
+        assert!(result.stdout.contains("--delete"));
+    }
 }

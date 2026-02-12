@@ -103,4 +103,115 @@ mod tests {
         assert!(result.stdout.contains("aaa"));
         assert!(result.stdout.contains("bbb"));
     }
+
+    #[tokio::test]
+    async fn test_head_n_attached() {
+        let content = "a\nb\nc\nd\ne\n";
+        let ctx = make_ctx_with_files(vec!["-n3", "/test.txt"], vec![("/test.txt", content)]).await;
+        let cmd = HeadCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.stdout, "a\nb\nc\n");
+    }
+
+    #[tokio::test]
+    async fn test_head_dash_num() {
+        let content = "a\nb\nc\nd\ne\n";
+        let ctx = make_ctx_with_files(vec!["-2", "/test.txt"], vec![("/test.txt", content)]).await;
+        let cmd = HeadCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.stdout, "a\nb\n");
+    }
+
+    #[tokio::test]
+    async fn test_head_fewer_lines_than_requested() {
+        let content = "a\nb\n";
+        let ctx = make_ctx_with_files(vec!["-n", "10", "/test.txt"], vec![("/test.txt", content)]).await;
+        let cmd = HeadCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.stdout, "a\nb\n");
+    }
+
+    #[tokio::test]
+    async fn test_head_missing_file() {
+        let fs = Arc::new(InMemoryFs::new());
+        let ctx = CommandContext {
+            args: vec!["/missing.txt".to_string()],
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs,
+            exec_fn: None,
+            fetch_fn: None,
+        };
+        let cmd = HeadCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 1);
+        assert!(result.stderr.contains("No such file or directory"));
+    }
+
+    #[tokio::test]
+    async fn test_head_from_stdin() {
+        let fs = Arc::new(InMemoryFs::new());
+        let ctx = CommandContext {
+            args: vec!["-n".to_string(), "2".to_string()],
+            stdin: "a\nb\nc\nd\ne\n".to_string(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs,
+            exec_fn: None,
+            fetch_fn: None,
+        };
+        let cmd = HeadCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.stdout, "a\nb\n");
+    }
+
+    #[tokio::test]
+    async fn test_head_empty_file() {
+        let ctx = make_ctx_with_files(vec!["/empty.txt"], vec![("/empty.txt", "")]).await;
+        let cmd = HeadCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "");
+    }
+
+    #[tokio::test]
+    async fn test_head_n1() {
+        let content = "first\nsecond\n";
+        let ctx = make_ctx_with_files(vec!["-n", "1", "/test.txt"], vec![("/test.txt", content)]).await;
+        let cmd = HeadCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.stdout, "first\n");
+    }
+
+    #[tokio::test]
+    async fn test_head_file_without_trailing_newline() {
+        let content = "no newline";
+        let ctx = make_ctx_with_files(vec!["-n", "1", "/test.txt"], vec![("/test.txt", content)]).await;
+        let cmd = HeadCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.stdout, "no newline");
+    }
+
+    #[tokio::test]
+    async fn test_head_show_first_line_only() {
+        let content = "first\nsecond\nthird\n";
+        let ctx = make_ctx_with_files(vec!["-n", "1", "/test.txt"], vec![("/test.txt", content)]).await;
+        let cmd = HeadCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.stdout, "first\n");
+    }
+
+    #[tokio::test]
+    async fn test_head_20_lines_default_10() {
+        let lines: Vec<String> = (1..=20).map(|i| format!("line{}", i)).collect();
+        let content = lines.join("\n") + "\n";
+        let ctx = make_ctx_with_files(vec!["/test.txt"], vec![("/test.txt", &content)]).await;
+        let cmd = HeadCommand;
+        let result = cmd.execute(ctx).await;
+        let expected: Vec<String> = (1..=10).map(|i| format!("line{}", i)).collect();
+        let expected = expected.join("\n") + "\n";
+        assert_eq!(result.stdout, expected);
+        assert_eq!(result.exit_code, 0);
+    }
 }

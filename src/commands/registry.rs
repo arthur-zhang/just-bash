@@ -92,6 +92,15 @@ use super::tee::TeeCommand;
 use super::sleep_cmd::SleepCommand;
 use super::split_cmd::SplitCommand;
 
+// Batch G imports
+use super::true_cmd::{TrueCommand, FalseCommand};
+use super::clear_cmd::ClearCommand;
+use super::whoami_cmd::WhoamiCommand;
+use super::hostname_cmd::HostnameCommand;
+use super::rmdir_cmd::RmdirCommand;
+use super::tac_cmd::TacCommand;
+use super::rev_cmd::RevCommand;
+
 /// 注册批次 A 的所有命令
 pub fn register_batch_a(registry: &mut CommandRegistry) {
     registry.register(Box::new(BasenameCommand));
@@ -221,5 +230,30 @@ pub fn create_batch_abcdef_registry() -> CommandRegistry {
     register_batch_d(&mut registry);
     register_batch_e(&mut registry);
     register_batch_f(&mut registry);
+    registry
+}
+
+/// 注册批次 G 的所有命令 (true, false, clear, whoami, hostname, rmdir, tac, rev)
+pub fn register_batch_g(registry: &mut CommandRegistry) {
+    registry.register(Box::new(TrueCommand));
+    registry.register(Box::new(FalseCommand));
+    registry.register(Box::new(ClearCommand));
+    registry.register(Box::new(WhoamiCommand));
+    registry.register(Box::new(HostnameCommand));
+    registry.register(Box::new(RmdirCommand));
+    registry.register(Box::new(TacCommand));
+    registry.register(Box::new(RevCommand));
+}
+
+/// 创建包含批次 A-G 命令的注册表
+pub fn create_batch_abcdefg_registry() -> CommandRegistry {
+    let mut registry = CommandRegistry::new();
+    register_batch_a(&mut registry);
+    register_batch_b(&mut registry);
+    register_batch_c(&mut registry);
+    register_batch_d(&mut registry);
+    register_batch_e(&mut registry);
+    register_batch_f(&mut registry);
+    register_batch_g(&mut registry);
     registry
 }

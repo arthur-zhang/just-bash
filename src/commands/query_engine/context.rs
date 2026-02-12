@@ -98,3 +98,63 @@ impl std::fmt::Display for JqError {
 }
 
 impl std::error::Error for JqError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_eval_context_new() {
+        let ctx = EvalContext::new();
+        assert!(ctx.vars.is_empty());
+        assert!(ctx.funcs.is_empty());
+        assert!(ctx.root.is_none());
+        assert_eq!(ctx.max_iterations, DEFAULT_MAX_ITERATIONS);
+        assert_eq!(ctx.max_depth, DEFAULT_MAX_DEPTH);
+    }
+
+    #[test]
+    fn test_eval_context_with_env() {
+        let mut env = HashMap::new();
+        env.insert("HOME".to_string(), "/home/user".to_string());
+        let ctx = EvalContext::with_env(env);
+        assert_eq!(ctx.env.get("HOME"), Some(&"/home/user".to_string()));
+    }
+
+    #[test]
+    fn test_eval_context_with_var() {
+        let ctx = EvalContext::new();
+        let ctx2 = ctx.with_var("x", Value::Number(42.0));
+        assert!(ctx.vars.is_empty());
+        assert_eq!(ctx2.vars.get("x"), Some(&Value::Number(42.0)));
+    }
+
+    #[test]
+    fn test_eval_context_default() {
+        let ctx: EvalContext = Default::default();
+        assert!(ctx.vars.is_empty());
+    }
+
+    #[test]
+    fn test_jq_error_display() {
+        let e1 = JqError::Type("invalid type".to_string());
+        assert!(format!("{}", e1).contains("Type error"));
+
+        let e2 = JqError::Runtime("runtime issue".to_string());
+        assert!(format!("{}", e2).contains("Runtime error"));
+
+        let e3 = JqError::Parse("parse failed".to_string());
+        assert!(format!("{}", e3).contains("Parse error"));
+
+        let e4 = JqError::ExecutionLimit("too many iterations".to_string());
+        assert!(format!("{}", e4).contains("Execution limit"));
+    }
+
+    #[test]
+    fn test_path_element() {
+        let key = PathElement::Key("name".to_string());
+        let idx = PathElement::Index(0);
+        assert!(matches!(key, PathElement::Key(_)));
+        assert!(matches!(idx, PathElement::Index(0)));
+    }
+}

@@ -345,3 +345,93 @@ impl Value {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_value_null() {
+        let v = Value::Null;
+        assert!(v.is_null());
+        assert_eq!(v.type_name(), "null");
+        assert!(!v.is_truthy());
+    }
+
+    #[test]
+    fn test_value_bool() {
+        let t = Value::Bool(true);
+        let f = Value::Bool(false);
+        assert!(t.is_bool());
+        assert!(t.is_truthy());
+        assert!(!f.is_truthy());
+        assert_eq!(t.as_bool(), Some(true));
+    }
+
+    #[test]
+    fn test_value_number() {
+        let n = Value::Number(42.0);
+        assert!(n.is_number());
+        assert_eq!(n.as_f64(), Some(42.0));
+        assert_eq!(n.type_name(), "number");
+    }
+
+    #[test]
+    fn test_value_string() {
+        let s = Value::String("hello".to_string());
+        assert!(s.is_string());
+        assert_eq!(s.as_str(), Some("hello"));
+        assert_eq!(s.type_name(), "string");
+    }
+
+    #[test]
+    fn test_value_array() {
+        let arr = Value::Array(vec![Value::Number(1.0), Value::Number(2.0)]);
+        assert!(arr.is_array());
+        assert_eq!(arr.as_array().unwrap().len(), 2);
+        assert_eq!(arr.type_name(), "array");
+    }
+
+    #[test]
+    fn test_value_object() {
+        let mut map = IndexMap::new();
+        map.insert("key".to_string(), Value::String("value".to_string()));
+        let obj = Value::Object(map);
+        assert!(obj.is_object());
+        assert_eq!(obj.type_name(), "object");
+    }
+
+    #[test]
+    fn test_value_from_traits() {
+        let v1: Value = true.into();
+        assert!(matches!(v1, Value::Bool(true)));
+
+        let v2: Value = 42i64.into();
+        assert!(matches!(v2, Value::Number(_)));
+
+        let v3: Value = "test".into();
+        assert!(matches!(v3, Value::String(_)));
+    }
+
+    #[test]
+    fn test_value_equality() {
+        assert_eq!(Value::Null, Value::Null);
+        assert_eq!(Value::Bool(true), Value::Bool(true));
+        assert_eq!(Value::Number(1.0), Value::Number(1.0));
+        assert_ne!(Value::Number(1.0), Value::Number(2.0));
+    }
+
+    #[test]
+    fn test_to_json_string_compact() {
+        let arr = Value::Array(vec![Value::Number(1.0), Value::Number(2.0)]);
+        assert_eq!(arr.to_json_string_compact(), "[1,2]");
+    }
+
+    #[test]
+    fn test_display() {
+        assert_eq!(format!("{}", Value::Null), "null");
+        assert_eq!(format!("{}", Value::Bool(true)), "true");
+        assert_eq!(format!("{}", Value::Number(42.0)), "42");
+        assert_eq!(format!("{}", Value::String("hi".to_string())), "hi");
+    }
+}

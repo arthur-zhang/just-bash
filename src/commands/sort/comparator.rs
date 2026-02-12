@@ -490,3 +490,87 @@ pub fn create_comparator(opts: &SortOptions) -> Box<dyn Fn(&str, &str) -> Orderi
         }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_key_spec_simple() {
+        let key = parse_key_spec("2");
+        assert_eq!(key.start_field, 2);
+        assert_eq!(key.end_field, 0);
+    }
+
+    #[test]
+    fn test_parse_key_spec_range() {
+        let key = parse_key_spec("2,4");
+        assert_eq!(key.start_field, 2);
+        assert_eq!(key.end_field, 4);
+    }
+
+    #[test]
+    fn test_parse_key_spec_with_options() {
+        let key = parse_key_spec("2n,3r");
+        assert_eq!(key.start_field, 2);
+        assert_eq!(key.end_field, 3);
+        assert!(key.options.numeric);
+        assert!(key.options.reverse);
+    }
+
+    #[test]
+    fn test_parse_key_spec_with_char() {
+        let key = parse_key_spec("1.2,3.4");
+        assert_eq!(key.start_field, 1);
+        assert_eq!(key.start_char, 2);
+        assert_eq!(key.end_field, 3);
+        assert_eq!(key.end_char, 4);
+    }
+
+    #[test]
+    fn test_extract_key_simple() {
+        let key = parse_key_spec("2");
+        let result = extract_key("a b c", &key, None);
+        assert_eq!(result, "b c");
+    }
+
+    #[test]
+    fn test_extract_key_with_separator() {
+        let key = parse_key_spec("2,2");
+        let result = extract_key("a:b:c", &key, Some(':'));
+        assert_eq!(result, "b");
+    }
+
+    #[test]
+    fn test_compare_months() {
+        assert_eq!(compare_months("Jan", "Feb"), Ordering::Less);
+        assert_eq!(compare_months("DEC", "jan"), Ordering::Greater);
+        assert_eq!(compare_months("mar", "MAR"), Ordering::Equal);
+    }
+
+    #[test]
+    fn test_compare_human_sizes() {
+        assert_eq!(compare_human_sizes("1K", "1M"), Ordering::Less);
+        assert_eq!(compare_human_sizes("2G", "1G"), Ordering::Greater);
+        assert_eq!(compare_human_sizes("100", "100"), Ordering::Equal);
+    }
+
+    #[test]
+    fn test_compare_versions() {
+        assert_eq!(compare_versions("1.0", "1.1"), Ordering::Less);
+        assert_eq!(compare_versions("2.0", "1.9"), Ordering::Greater);
+        assert_eq!(compare_versions("1.10", "1.9"), Ordering::Greater);
+    }
+
+    #[test]
+    fn test_compare_values_string() {
+        assert_eq!(compare_values("abc", "abd", CompareMode::String, false, false), Ordering::Less);
+        assert_eq!(compare_values("ABC", "abc", CompareMode::String, true, false), Ordering::Equal);
+    }
+
+    #[test]
+    fn test_compare_values_numeric() {
+        assert_eq!(compare_values("10", "9", CompareMode::Numeric, false, false), Ordering::Greater);
+        assert_eq!(compare_values("2.5", "2.5", CompareMode::Numeric, false, false), Ordering::Equal);
+    }
+}

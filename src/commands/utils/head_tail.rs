@@ -225,3 +225,76 @@ pub fn get_tail(content: &str, lines: usize, bytes: Option<usize>, from_line: bo
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_head_lines() {
+        let content = "line1\nline2\nline3\nline4\n";
+        assert_eq!(get_head(content, 2, None), "line1\nline2\n");
+    }
+
+    #[test]
+    fn test_get_head_bytes() {
+        let content = "hello world";
+        assert_eq!(get_head(content, 10, Some(5)), "hello");
+    }
+
+    #[test]
+    fn test_get_head_zero_lines() {
+        let content = "line1\nline2\n";
+        assert_eq!(get_head(content, 0, None), "");
+    }
+
+    #[test]
+    fn test_get_tail_lines() {
+        let content = "line1\nline2\nline3\nline4\n";
+        assert_eq!(get_tail(content, 2, None, false), "line3\nline4\n");
+    }
+
+    #[test]
+    fn test_get_tail_bytes() {
+        let content = "hello world";
+        assert_eq!(get_tail(content, 10, Some(5), false), "world");
+    }
+
+    #[test]
+    fn test_get_tail_from_line() {
+        let content = "line1\nline2\nline3\nline4\n";
+        let result = get_tail(content, 2, None, true);
+        assert!(result.contains("line2"));
+    }
+
+    #[test]
+    fn test_parse_head_tail_args_lines() {
+        let args: Vec<String> = vec!["-n", "5"].into_iter().map(String::from).collect();
+        if let HeadTailParseResult::Ok(opts) = parse_head_tail_args(&args, "head") {
+            assert_eq!(opts.lines, 5);
+        } else {
+            panic!("Expected Ok");
+        }
+    }
+
+    #[test]
+    fn test_parse_head_tail_args_bytes() {
+        let args: Vec<String> = vec!["-c", "100"].into_iter().map(String::from).collect();
+        if let HeadTailParseResult::Ok(opts) = parse_head_tail_args(&args, "head") {
+            assert_eq!(opts.bytes, Some(100));
+        } else {
+            panic!("Expected Ok");
+        }
+    }
+
+    #[test]
+    fn test_parse_head_tail_args_quiet() {
+        let args: Vec<String> = vec!["-q", "file.txt"].into_iter().map(String::from).collect();
+        if let HeadTailParseResult::Ok(opts) = parse_head_tail_args(&args, "head") {
+            assert!(opts.quiet);
+            assert_eq!(opts.files, vec!["file.txt"]);
+        } else {
+            panic!("Expected Ok");
+        }
+    }
+}

@@ -120,3 +120,86 @@ impl Command for ShCommand {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use crate::fs::InMemoryFs;
+
+    fn create_ctx(args: Vec<&str>) -> CommandContext {
+        CommandContext {
+            args: args.into_iter().map(String::from).collect(),
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: Arc::new(InMemoryFs::new()),
+            exec_fn: None,
+            fetch_fn: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_bash_help() {
+        let ctx = create_ctx(vec!["--help"]);
+        let result = BashCommand.execute(ctx).await;
+        assert!(result.stdout.contains("bash"));
+        assert!(result.stdout.contains("-c"));
+    }
+
+    #[tokio::test]
+    async fn test_sh_help() {
+        let ctx = create_ctx(vec!["--help"]);
+        let result = ShCommand.execute(ctx).await;
+        assert!(result.stdout.contains("sh"));
+        assert!(result.stdout.contains("-c"));
+    }
+
+    #[tokio::test]
+    async fn test_bash_no_exec_fn() {
+        let ctx = create_ctx(vec!["-c", "echo hello"]);
+        let result = BashCommand.execute(ctx).await;
+        assert!(result.stderr.contains("internal error"));
+    }
+
+    #[tokio::test]
+    async fn test_sh_no_exec_fn() {
+        let ctx = create_ctx(vec!["-c", "echo hello"]);
+        let result = ShCommand.execute(ctx).await;
+        assert!(result.stderr.contains("internal error"));
+    }
+
+    #[tokio::test]
+    async fn test_bash_empty_no_stdin() {
+        let mut ctx = create_ctx(vec![]);
+        ctx.exec_fn = Some(Arc::new(|_, _, _, _, _| {
+            Box::pin(async { CommandResult::success("ok".to_string()) })
+        }));
+        let result = BashCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_bash_file_not_found() {
+        let mut ctx = create_ctx(vec!["nonexistent.sh"]);
+        ctx.exec_fn = Some(Arc::new(|_, _, _, _, _| {
+            Box::pin(async { CommandResult::success("ok".to_string()) })
+        }));
+        let result = BashCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 127);
+        assert!(result.stderr.contains("No such file or directory"));
+    }
+
+    #[tokio::test]
+    async fn test_sh_file_not_found() {
+        let mut ctx = create_ctx(vec!["nonexistent.sh"]);
+        ctx.exec_fn = Some(Arc::new(|_, _, _, _, _| {
+            Box::pin(async { CommandResult::success("ok".to_string()) })
+        }));
+        let result = ShCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 127);
+        assert!(result.stderr.contains("No such file or directory"));
+    }
+}

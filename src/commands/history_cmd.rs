@@ -39,3 +39,68 @@ impl Command for HistoryCommand {
         CommandResult::success(stdout)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use crate::fs::InMemoryFs;
+
+    fn create_ctx(args: Vec<&str>) -> CommandContext {
+        CommandContext {
+            args: args.into_iter().map(String::from).collect(),
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: Arc::new(InMemoryFs::new()),
+            exec_fn: None,
+            fetch_fn: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_help() {
+        let ctx = create_ctx(vec!["--help"]);
+        let result = HistoryCommand.execute(ctx).await;
+        assert!(result.stdout.contains("history"));
+        assert!(result.stdout.contains("-c"));
+    }
+
+    #[tokio::test]
+    async fn test_empty_history() {
+        let ctx = create_ctx(vec![]);
+        let result = HistoryCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_with_history() {
+        let mut ctx = create_ctx(vec![]);
+        ctx.env.insert(HISTORY_KEY.to_string(), r#"["ls","pwd","echo hello"]"#.to_string());
+        let result = HistoryCommand.execute(ctx).await;
+        assert!(result.stdout.contains("ls"));
+        assert!(result.stdout.contains("pwd"));
+        assert!(result.stdout.contains("echo hello"));
+    }
+
+    #[tokio::test]
+    async fn test_history_count() {
+        let mut ctx = create_ctx(vec!["2"]);
+        ctx.env.insert(HISTORY_KEY.to_string(), r#"["ls","pwd","echo hello"]"#.to_string());
+        let result = HistoryCommand.execute(ctx).await;
+        assert!(!result.stdout.contains("ls"));
+        assert!(result.stdout.contains("pwd"));
+        assert!(result.stdout.contains("echo hello"));
+    }
+
+    #[tokio::test]
+    async fn test_clear_history() {
+        let mut ctx = create_ctx(vec!["-c"]);
+        ctx.env.insert(HISTORY_KEY.to_string(), r#"["ls","pwd"]"#.to_string());
+        let result = HistoryCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.is_empty());
+    }
+}

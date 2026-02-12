@@ -59,3 +59,86 @@ impl Command for AliasCommand {
         CommandResult::success(String::new())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use crate::fs::InMemoryFs;
+
+    fn create_ctx(args: Vec<&str>) -> CommandContext {
+        CommandContext {
+            args: args.into_iter().map(String::from).collect(),
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: Arc::new(InMemoryFs::new()),
+            exec_fn: None,
+            fetch_fn: None,
+        }
+    }
+
+    fn create_ctx_with_env(args: Vec<&str>, env: HashMap<String, String>) -> CommandContext {
+        CommandContext {
+            args: args.into_iter().map(String::from).collect(),
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env,
+            fs: Arc::new(InMemoryFs::new()),
+            exec_fn: None,
+            fetch_fn: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_alias_help() {
+        let cmd = AliasCommand;
+        let result = cmd.execute(create_ctx(vec!["--help"])).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("alias"));
+    }
+
+    #[tokio::test]
+    async fn test_alias_list_empty() {
+        let cmd = AliasCommand;
+        let result = cmd.execute(create_ctx(vec![])).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "");
+    }
+
+    #[tokio::test]
+    async fn test_alias_list_with_aliases() {
+        let cmd = AliasCommand;
+        let mut env = HashMap::new();
+        env.insert("BASH_ALIAS_ll".to_string(), "ls -la".to_string());
+        let result = cmd.execute(create_ctx_with_env(vec![], env)).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("alias ll='ls -la'"));
+    }
+
+    #[tokio::test]
+    async fn test_alias_set() {
+        let cmd = AliasCommand;
+        let result = cmd.execute(create_ctx(vec!["ll=ls -la"])).await;
+        assert_eq!(result.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_alias_get_existing() {
+        let cmd = AliasCommand;
+        let mut env = HashMap::new();
+        env.insert("BASH_ALIAS_ll".to_string(), "ls -la".to_string());
+        let result = cmd.execute(create_ctx_with_env(vec!["ll"], env)).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("alias ll='ls -la'"));
+    }
+
+    #[tokio::test]
+    async fn test_alias_get_not_found() {
+        let cmd = AliasCommand;
+        let result = cmd.execute(create_ctx(vec!["nonexistent"])).await;
+        assert_eq!(result.exit_code, 1);
+        assert!(result.stderr.contains("not found"));
+    }
+}

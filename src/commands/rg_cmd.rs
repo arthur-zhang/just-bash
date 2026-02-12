@@ -392,3 +392,104 @@ async fn collect_files(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use crate::fs::InMemoryFs;
+
+    fn create_ctx(args: Vec<&str>) -> CommandContext {
+        CommandContext {
+            args: args.into_iter().map(String::from).collect(),
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: Arc::new(InMemoryFs::new()),
+            exec_fn: None,
+            fetch_fn: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_help() {
+        let ctx = create_ctx(vec!["--help"]);
+        let result = RgCommand.execute(ctx).await;
+        assert!(result.stdout.contains("rg"));
+        assert!(result.stdout.contains("PATTERN"));
+    }
+
+    #[tokio::test]
+    async fn test_no_pattern() {
+        let ctx = create_ctx(vec![]);
+        let result = RgCommand.execute(ctx).await;
+        assert!(result.stderr.contains("no pattern"));
+    }
+
+    #[tokio::test]
+    async fn test_search_file() {
+        let mut ctx = create_ctx(vec!["hello", "/test.txt"]);
+        let fs = Arc::new(InMemoryFs::new());
+        fs.write_file("/test.txt", b"hello world\nfoo bar\nhello again").await.unwrap();
+        ctx.fs = fs;
+        let result = RgCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("hello world"));
+        assert!(result.stdout.contains("hello again"));
+    }
+
+    #[tokio::test]
+    async fn test_ignore_case() {
+        let mut ctx = create_ctx(vec!["-i", "HELLO", "/test.txt"]);
+        let fs = Arc::new(InMemoryFs::new());
+        fs.write_file("/test.txt", b"hello world").await.unwrap();
+        ctx.fs = fs;
+        let result = RgCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("hello"));
+    }
+
+    #[tokio::test]
+    async fn test_count() {
+        let mut ctx = create_ctx(vec!["-c", "hello", "/test.txt"]);
+        let fs = Arc::new(InMemoryFs::new());
+        fs.write_file("/test.txt", b"hello\nhello\nworld").await.unwrap();
+        ctx.fs = fs;
+        let result = RgCommand.execute(ctx).await;
+        assert!(result.stdout.contains("2"));
+    }
+
+    #[tokio::test]
+    async fn test_files_with_matches() {
+        let mut ctx = create_ctx(vec!["-l", "hello", "/test.txt"]);
+        let fs = Arc::new(InMemoryFs::new());
+        fs.write_file("/test.txt", b"hello world").await.unwrap();
+        ctx.fs = fs;
+        let result = RgCommand.execute(ctx).await;
+        assert!(result.stdout.contains("/test.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_invert_match() {
+        let mut ctx = create_ctx(vec!["-v", "hello", "/test.txt"]);
+        let fs = Arc::new(InMemoryFs::new());
+        fs.write_file("/test.txt", b"hello\nworld\nhello").await.unwrap();
+        ctx.fs = fs;
+        let result = RgCommand.execute(ctx).await;
+        assert!(result.stdout.contains("world"));
+        assert!(!result.stdout.contains("hello"));
+    }
+
+    #[tokio::test]
+    async fn test_type_filter() {
+        assert!(matches_type("/foo.rs", &vec!["rs".to_string()], &vec![]));
+        assert!(!matches_type("/foo.py", &vec!["rs".to_string()], &vec![]));
+    }
+
+    #[tokio::test]
+    async fn test_glob_filter() {
+        assert!(matches_glob("/foo/bar.txt", &vec!["*.txt".to_string()]));
+        assert!(!matches_glob("/foo/bar.rs", &vec!["*.txt".to_string()]));
+    }
+}

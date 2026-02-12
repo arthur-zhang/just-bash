@@ -49,3 +49,51 @@ impl Command for HelpCommand {
         CommandResult::success(stdout)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use crate::fs::InMemoryFs;
+
+    fn create_ctx(args: Vec<&str>) -> CommandContext {
+        CommandContext {
+            args: args.into_iter().map(String::from).collect(),
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: Arc::new(InMemoryFs::new()),
+            exec_fn: None,
+            fetch_fn: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_help_help() {
+        let ctx = create_ctx(vec!["--help"]);
+        let result = HelpCommand.execute(ctx).await;
+        assert!(result.stdout.contains("help"));
+        assert!(result.stdout.contains("Usage"));
+    }
+
+    #[tokio::test]
+    async fn test_list_commands() {
+        let ctx = create_ctx(vec![]);
+        let result = HelpCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("Available commands"));
+        assert!(result.stdout.contains("File operations"));
+        assert!(result.stdout.contains("ls"));
+        assert!(result.stdout.contains("grep"));
+    }
+
+    #[tokio::test]
+    async fn test_categories() {
+        let ctx = create_ctx(vec![]);
+        let result = HelpCommand.execute(ctx).await;
+        assert!(result.stdout.contains("Text processing"));
+        assert!(result.stdout.contains("Network"));
+        assert!(result.stdout.contains("Data processing"));
+    }
+}

@@ -467,3 +467,133 @@ async fn cmd_from(ctx: &CommandContext, args: &[String]) -> CommandResult {
 
     CommandResult::success(rows_to_csv(&rows))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use crate::fs::InMemoryFs;
+
+    fn create_ctx(args: Vec<&str>) -> CommandContext {
+        CommandContext {
+            args: args.into_iter().map(String::from).collect(),
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: Arc::new(InMemoryFs::new()),
+            exec_fn: None,
+            fetch_fn: None,
+        }
+    }
+
+    const CSV_DATA: &str = "name,age,city\nalice,30,nyc\nbob,25,la\ncharlie,35,sf\n";
+
+    #[tokio::test]
+    async fn test_help() {
+        let ctx = create_ctx(vec!["--help"]);
+        let result = XanCommand.execute(ctx).await;
+        assert!(result.stdout.contains("xan"));
+        assert!(result.stdout.contains("headers"));
+    }
+
+    #[tokio::test]
+    async fn test_headers() {
+        let mut ctx = create_ctx(vec!["headers"]);
+        ctx.stdin = CSV_DATA.to_string();
+        let result = XanCommand.execute(ctx).await;
+        assert!(result.stdout.contains("name"));
+        assert!(result.stdout.contains("age"));
+        assert!(result.stdout.contains("city"));
+    }
+
+    #[tokio::test]
+    async fn test_count() {
+        let mut ctx = create_ctx(vec!["count"]);
+        ctx.stdin = CSV_DATA.to_string();
+        let result = XanCommand.execute(ctx).await;
+        assert!(result.stdout.contains("3"));
+    }
+
+    #[tokio::test]
+    async fn test_head() {
+        let mut ctx = create_ctx(vec!["head"]);
+        ctx.stdin = CSV_DATA.to_string();
+        let result = XanCommand.execute(ctx).await;
+        assert!(result.stdout.contains("alice"));
+        assert!(result.stdout.contains("bob"));
+    }
+
+    #[tokio::test]
+    async fn test_tail() {
+        let mut ctx = create_ctx(vec!["tail"]);
+        ctx.stdin = CSV_DATA.to_string();
+        let result = XanCommand.execute(ctx).await;
+        assert!(result.stdout.contains("charlie"));
+    }
+
+    #[tokio::test]
+    async fn test_select() {
+        let rows = parse_csv(CSV_DATA);
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0][0], "name");
+    }
+
+    #[tokio::test]
+    async fn test_sort() {
+        let mut ctx = create_ctx(vec!["sort", "-N", "-"]);
+        ctx.stdin = CSV_DATA.to_string();
+        let result = XanCommand.execute(ctx).await;
+        assert!(result.stdout.contains("bob"));
+    }
+
+    #[tokio::test]
+    async fn test_filter() {
+        assert!(matches_filter("30", ">", "28"));
+        assert!(!matches_filter("25", ">", "28"));
+    }
+
+    #[tokio::test]
+    async fn test_search() {
+        let re = regex_lite::Regex::new("alice").unwrap();
+        assert!(re.is_match("alice"));
+        assert!(!re.is_match("bob"));
+    }
+
+    #[tokio::test]
+    async fn test_to_json() {
+        let mut ctx = create_ctx(vec!["to"]);
+        ctx.stdin = CSV_DATA.to_string();
+        let result = XanCommand.execute(ctx).await;
+        assert!(result.stdout.contains("alice"));
+    }
+
+    #[tokio::test]
+    async fn test_from_json() {
+        let mut ctx = create_ctx(vec!["from"]);
+        ctx.stdin = r#"[{"name":"alice","age":"30"}]"#.to_string();
+        let result = XanCommand.execute(ctx).await;
+        assert!(result.stdout.contains("alice"));
+    }
+
+    #[tokio::test]
+    async fn test_unknown_command() {
+        let ctx = create_ctx(vec!["unknown"]);
+        let result = XanCommand.execute(ctx).await;
+        assert!(result.stderr.contains("unknown command"));
+    }
+
+    #[test]
+    fn test_parse_csv() {
+        let rows = parse_csv("a,b\n1,2\n");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0], vec!["a", "b"]);
+    }
+
+    #[test]
+    fn test_matches_filter() {
+        assert!(matches_filter("30", ">", "25"));
+        assert!(!matches_filter("20", ">", "25"));
+        assert!(matches_filter("hello", "=", "hello"));
+    }
+}

@@ -56,14 +56,24 @@ fn html_to_markdown(html: &str) -> String {
         }).to_string();
     }
 
-    let strong_re = Regex::new(r"(?is)<(strong|b)[^>]*>(.*?)</\1>").unwrap();
+    let strong_re = Regex::new(r"(?is)<strong[^>]*>(.*?)</strong>").unwrap();
     result = strong_re.replace_all(&result, |caps: &regex_lite::Captures| {
-        format!("**{}**", strip_tags(caps.get(2).map_or("", |m| m.as_str())))
+        format!("**{}**", strip_tags(caps.get(1).map_or("", |m| m.as_str())))
     }).to_string();
 
-    let em_re = Regex::new(r"(?is)<(em|i)[^>]*>(.*?)</\1>").unwrap();
+    let b_re = Regex::new(r"(?is)<b[^>]*>(.*?)</b>").unwrap();
+    result = b_re.replace_all(&result, |caps: &regex_lite::Captures| {
+        format!("**{}**", strip_tags(caps.get(1).map_or("", |m| m.as_str())))
+    }).to_string();
+
+    let em_re = Regex::new(r"(?is)<em[^>]*>(.*?)</em>").unwrap();
     result = em_re.replace_all(&result, |caps: &regex_lite::Captures| {
-        format!("_{}_", strip_tags(caps.get(2).map_or("", |m| m.as_str())))
+        format!("_{}_", strip_tags(caps.get(1).map_or("", |m| m.as_str())))
+    }).to_string();
+
+    let i_re = Regex::new(r"(?is)<i[^>]*>(.*?)</i>").unwrap();
+    result = i_re.replace_all(&result, |caps: &regex_lite::Captures| {
+        format!("_{}_", strip_tags(caps.get(1).map_or("", |m| m.as_str())))
     }).to_string();
 
     let code_re = Regex::new(r"(?is)<code[^>]*>(.*?)</code>").unwrap();
@@ -140,4 +150,106 @@ fn html_to_markdown(html: &str) -> String {
 fn strip_tags(html: &str) -> String {
     let tag_re = Regex::new(r"<[^>]+>").unwrap();
     tag_re.replace_all(html, "").to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use crate::fs::InMemoryFs;
+
+    fn create_ctx(args: Vec<&str>) -> CommandContext {
+        CommandContext {
+            args: args.into_iter().map(String::from).collect(),
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: Arc::new(InMemoryFs::new()),
+            exec_fn: None,
+            fetch_fn: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_help() {
+        let ctx = create_ctx(vec!["--help"]);
+        let result = HtmlToMarkdownCommand.execute(ctx).await;
+        assert!(result.stdout.contains("html-to-markdown"));
+        assert!(result.stdout.contains("Markdown"));
+    }
+
+    #[tokio::test]
+    async fn test_empty_input() {
+        let ctx = create_ctx(vec![]);
+        let result = HtmlToMarkdownCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_headings() {
+        let mut ctx = create_ctx(vec![]);
+        ctx.stdin = "<h1>Title</h1><h2>Subtitle</h2>".to_string();
+        let result = HtmlToMarkdownCommand.execute(ctx).await;
+        assert!(result.stdout.contains("# Title"));
+        assert!(result.stdout.contains("## Subtitle"));
+    }
+
+    #[tokio::test]
+    async fn test_bold_italic() {
+        let mut ctx = create_ctx(vec![]);
+        ctx.stdin = "<strong>bold</strong> and <em>italic</em>".to_string();
+        let result = HtmlToMarkdownCommand.execute(ctx).await;
+        assert!(result.stdout.contains("**bold**"));
+        assert!(result.stdout.contains("_italic_"));
+    }
+
+    #[tokio::test]
+    async fn test_links() {
+        let mut ctx = create_ctx(vec![]);
+        ctx.stdin = r#"<a href="https://example.com">link</a>"#.to_string();
+        let result = HtmlToMarkdownCommand.execute(ctx).await;
+        assert!(result.stdout.contains("[link](https://example.com)"));
+    }
+
+    #[tokio::test]
+    async fn test_code() {
+        let mut ctx = create_ctx(vec![]);
+        ctx.stdin = "<code>inline</code> and <pre>block</pre>".to_string();
+        let result = HtmlToMarkdownCommand.execute(ctx).await;
+        assert!(result.stdout.contains("`inline`"));
+        assert!(result.stdout.contains("```"));
+    }
+
+    #[tokio::test]
+    async fn test_list() {
+        let mut ctx = create_ctx(vec![]);
+        ctx.stdin = "<ul><li>one</li><li>two</li></ul>".to_string();
+        let result = HtmlToMarkdownCommand.execute(ctx).await;
+        assert!(result.stdout.contains("- one"));
+        assert!(result.stdout.contains("- two"));
+    }
+
+    #[tokio::test]
+    async fn test_strip_script_style() {
+        let mut ctx = create_ctx(vec![]);
+        ctx.stdin = "<script>alert(1)</script><style>.x{}</style><p>text</p>".to_string();
+        let result = HtmlToMarkdownCommand.execute(ctx).await;
+        assert!(!result.stdout.contains("alert"));
+        assert!(!result.stdout.contains(".x"));
+        assert!(result.stdout.contains("text"));
+    }
+
+    #[test]
+    fn test_html_to_markdown_fn() {
+        assert_eq!(html_to_markdown("<p>hello</p>").trim(), "hello");
+        assert_eq!(html_to_markdown("<h1>title</h1>").trim(), "# title");
+    }
+
+    #[test]
+    fn test_strip_tags_fn() {
+        assert_eq!(strip_tags("<p>hello</p>"), "hello");
+        assert_eq!(strip_tags("<a href='x'>link</a>"), "link");
+    }
 }

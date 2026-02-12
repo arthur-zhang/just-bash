@@ -1,7 +1,9 @@
 // src/commands/mod.rs
+pub mod alias_cmd;
 pub mod awk;
 pub mod base64_cmd;
 pub mod basename;
+pub mod bash_cmd;
 pub mod cat;
 pub mod chmod;
 pub mod clear_cmd;
@@ -21,6 +23,8 @@ pub mod expr_cmd;
 pub mod file_cmd;
 pub mod find;
 pub mod fold_cmd;
+pub mod help_cmd;
+pub mod history_cmd;
 pub mod hostname_cmd;
 pub mod md5sum;
 pub mod stat_cmd;
@@ -60,6 +64,7 @@ pub mod touch;
 pub mod tr;
 pub mod tree_cmd;
 pub mod true_cmd;
+pub mod unalias_cmd;
 pub mod wc;
 pub mod uniq;
 pub mod which_cmd;
@@ -70,5 +75,5 @@ pub mod utils;
 pub mod query_engine;
 pub mod yq;
 
-pub use registry::{CommandRegistry, register_batch_a, register_batch_b, register_batch_c, register_batch_d, register_batch_e, register_batch_f, register_batch_g, register_batch_h, register_batch_i, register_batch_j, register_batch_k, create_batch_a_registry, create_batch_ab_registry, create_batch_abc_registry, create_batch_abcd_registry, create_batch_abcde_registry, create_batch_abcdef_registry, create_batch_abcdefg_registry, create_batch_abcdefgh_registry, create_batch_abcdefghi_registry, create_batch_abcdefghij_registry, create_batch_abcdefghijk_registry};
+pub use registry::{CommandRegistry, register_batch_a, register_batch_b, register_batch_c, register_batch_d, register_batch_e, register_batch_f, register_batch_g, register_batch_h, register_batch_i, register_batch_j, register_batch_k, register_batch_l, create_batch_a_registry, create_batch_ab_registry, create_batch_abc_registry, create_batch_abcd_registry, create_batch_abcde_registry, create_batch_abcdef_registry, create_batch_abcdefg_registry, create_batch_abcdefgh_registry, create_batch_abcdefghi_registry, create_batch_abcdefghij_registry, create_batch_abcdefghijk_registry, create_batch_abcdefghijkl_registry};
 pub use types::{Command, CommandContext, CommandResult};

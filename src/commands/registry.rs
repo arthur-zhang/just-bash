@@ -123,6 +123,13 @@ use super::od_cmd::OdCommand;
 use super::du_cmd::DuCommand;
 use super::file_cmd::FileCommand;
 
+// Batch L imports
+use super::alias_cmd::AliasCommand;
+use super::unalias_cmd::UnaliasCommand;
+use super::history_cmd::HistoryCommand;
+use super::bash_cmd::{BashCommand, ShCommand};
+use super::help_cmd::HelpCommand;
+
 /// 注册批次 A 的所有命令
 pub fn register_batch_a(registry: &mut CommandRegistry) {
     registry.register(Box::new(BasenameCommand));
@@ -369,5 +376,33 @@ pub fn create_batch_abcdefghijk_registry() -> CommandRegistry {
     register_batch_i(&mut registry);
     register_batch_j(&mut registry);
     register_batch_k(&mut registry);
+    registry
+}
+
+/// 注册批次 L 的所有命令 (alias, unalias, history, bash, sh, help)
+pub fn register_batch_l(registry: &mut CommandRegistry) {
+    registry.register(Box::new(AliasCommand));
+    registry.register(Box::new(UnaliasCommand));
+    registry.register(Box::new(HistoryCommand));
+    registry.register(Box::new(BashCommand));
+    registry.register(Box::new(ShCommand));
+    registry.register(Box::new(HelpCommand));
+}
+
+/// 创建包含批次 A-L 命令的注册表
+pub fn create_batch_abcdefghijkl_registry() -> CommandRegistry {
+    let mut registry = CommandRegistry::new();
+    register_batch_a(&mut registry);
+    register_batch_b(&mut registry);
+    register_batch_c(&mut registry);
+    register_batch_d(&mut registry);
+    register_batch_e(&mut registry);
+    register_batch_f(&mut registry);
+    register_batch_g(&mut registry);
+    register_batch_h(&mut registry);
+    register_batch_i(&mut registry);
+    register_batch_j(&mut registry);
+    register_batch_k(&mut registry);
+    register_batch_l(&mut registry);
     registry
 }

@@ -101,6 +101,14 @@ use super::rmdir_cmd::RmdirCommand;
 use super::tac_cmd::TacCommand;
 use super::rev_cmd::RevCommand;
 
+// Batch H imports
+use super::readlink_cmd::ReadlinkCommand;
+use super::which_cmd::WhichCommand;
+use super::time_cmd::TimeCommand;
+use super::expand_cmd::ExpandCommand;
+use super::fold_cmd::FoldCommand;
+use super::strings_cmd::StringsCommand;
+
 /// 注册批次 A 的所有命令
 pub fn register_batch_a(registry: &mut CommandRegistry) {
     registry.register(Box::new(BasenameCommand));
@@ -255,5 +263,29 @@ pub fn create_batch_abcdefg_registry() -> CommandRegistry {
     register_batch_e(&mut registry);
     register_batch_f(&mut registry);
     register_batch_g(&mut registry);
+    registry
+}
+
+/// 注册批次 H 的所有命令 (readlink, which, time, expand, fold, strings)
+pub fn register_batch_h(registry: &mut CommandRegistry) {
+    registry.register(Box::new(ReadlinkCommand));
+    registry.register(Box::new(WhichCommand));
+    registry.register(Box::new(TimeCommand));
+    registry.register(Box::new(ExpandCommand));
+    registry.register(Box::new(FoldCommand));
+    registry.register(Box::new(StringsCommand));
+}
+
+/// 创建包含批次 A-H 命令的注册表
+pub fn create_batch_abcdefgh_registry() -> CommandRegistry {
+    let mut registry = CommandRegistry::new();
+    register_batch_a(&mut registry);
+    register_batch_b(&mut registry);
+    register_batch_c(&mut registry);
+    register_batch_d(&mut registry);
+    register_batch_e(&mut registry);
+    register_batch_f(&mut registry);
+    register_batch_g(&mut registry);
+    register_batch_h(&mut registry);
     registry
 }

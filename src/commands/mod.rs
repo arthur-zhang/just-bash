@@ -49,6 +49,7 @@ pub mod pwd;
 pub mod readlink_cmd;
 pub mod registry;
 pub mod rev_cmd;
+pub mod rg_cmd;
 pub mod rm;
 pub mod rmdir_cmd;
 pub mod sed;
@@ -75,5 +76,5 @@ pub mod utils;
 pub mod query_engine;
 pub mod yq;
 
-pub use registry::{CommandRegistry, register_batch_a, register_batch_b, register_batch_c, register_batch_d, register_batch_e, register_batch_f, register_batch_g, register_batch_h, register_batch_i, register_batch_j, register_batch_k, register_batch_l, create_batch_a_registry, create_batch_ab_registry, create_batch_abc_registry, create_batch_abcd_registry, create_batch_abcde_registry, create_batch_abcdef_registry, create_batch_abcdefg_registry, create_batch_abcdefgh_registry, create_batch_abcdefghi_registry, create_batch_abcdefghij_registry, create_batch_abcdefghijk_registry, create_batch_abcdefghijkl_registry};
+pub use registry::{CommandRegistry, register_batch_a, register_batch_b, register_batch_c, register_batch_d, register_batch_e, register_batch_f, register_batch_g, register_batch_h, register_batch_i, register_batch_j, register_batch_k, register_batch_l, register_batch_m, create_batch_a_registry, create_batch_ab_registry, create_batch_abc_registry, create_batch_abcd_registry, create_batch_abcde_registry, create_batch_abcdef_registry, create_batch_abcdefg_registry, create_batch_abcdefgh_registry, create_batch_abcdefghi_registry, create_batch_abcdefghij_registry, create_batch_abcdefghijk_registry, create_batch_abcdefghijkl_registry, create_batch_abcdefghijklm_registry};
 pub use types::{Command, CommandContext, CommandResult};

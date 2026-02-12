@@ -461,3 +461,32 @@ pub fn create_batch_abcdefghijklmn_registry() -> CommandRegistry {
     register_batch_n(&mut registry);
     registry
 }
+
+// Batch O imports
+use super::xan_cmd::XanCommand;
+
+/// 注册批次 O 的所有命令 (xan)
+pub fn register_batch_o(registry: &mut CommandRegistry) {
+    registry.register(Box::new(XanCommand));
+}
+
+/// 创建包含批次 A-O 命令的注册表
+pub fn create_batch_abcdefghijklmno_registry() -> CommandRegistry {
+    let mut registry = CommandRegistry::new();
+    register_batch_a(&mut registry);
+    register_batch_b(&mut registry);
+    register_batch_c(&mut registry);
+    register_batch_d(&mut registry);
+    register_batch_e(&mut registry);
+    register_batch_f(&mut registry);
+    register_batch_g(&mut registry);
+    register_batch_h(&mut registry);
+    register_batch_i(&mut registry);
+    register_batch_j(&mut registry);
+    register_batch_k(&mut registry);
+    register_batch_l(&mut registry);
+    register_batch_m(&mut registry);
+    register_batch_n(&mut registry);
+    register_batch_o(&mut registry);
+    registry
+}

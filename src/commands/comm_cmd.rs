@@ -120,3 +120,68 @@ impl Command for CommCommand {
         CommandResult::success(output)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use crate::fs::{InMemoryFs, FileSystem};
+
+    fn create_ctx(args: Vec<&str>) -> CommandContext {
+        CommandContext {
+            args: args.into_iter().map(String::from).collect(),
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: Arc::new(InMemoryFs::new()),
+            exec_fn: None,
+            fetch_fn: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_help() {
+        let ctx = create_ctx(vec!["--help"]);
+        let result = CommCommand.execute(ctx).await;
+        assert!(result.stdout.contains("comm"));
+        assert!(result.stdout.contains("-1"));
+    }
+
+    #[tokio::test]
+    async fn test_missing_operand() {
+        let ctx = create_ctx(vec![]);
+        let result = CommCommand.execute(ctx).await;
+        assert!(result.stderr.contains("missing operand"));
+    }
+
+    #[tokio::test]
+    async fn test_compare_files() {
+        let mut ctx = create_ctx(vec!["/a.txt", "/b.txt"]);
+        let fs = Arc::new(InMemoryFs::new());
+        fs.write_file("/a.txt", b"a\nb\nc\n").await.unwrap();
+        fs.write_file("/b.txt", b"b\nc\nd\n").await.unwrap();
+        ctx.fs = fs;
+        let result = CommCommand.execute(ctx).await;
+        assert!(result.stdout.contains("a"));
+        assert!(result.stdout.contains("d"));
+    }
+
+    #[tokio::test]
+    async fn test_suppress_col1() {
+        let mut ctx = create_ctx(vec!["-1", "/a.txt", "/b.txt"]);
+        let fs = Arc::new(InMemoryFs::new());
+        fs.write_file("/a.txt", b"a\nb\n").await.unwrap();
+        fs.write_file("/b.txt", b"b\nc\n").await.unwrap();
+        ctx.fs = fs;
+        let result = CommCommand.execute(ctx).await;
+        assert!(!result.stdout.starts_with("a"));
+    }
+
+    #[tokio::test]
+    async fn test_file_not_found() {
+        let ctx = create_ctx(vec!["/nonexistent", "/b.txt"]);
+        let result = CommCommand.execute(ctx).await;
+        assert!(result.stderr.contains("No such file"));
+    }
+}

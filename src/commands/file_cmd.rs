@@ -182,3 +182,78 @@ impl Command for FileCommand {
         CommandResult::with_exit_code(output, String::new(), exit_code)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use crate::fs::{InMemoryFs, FileSystem};
+
+    fn create_ctx(args: Vec<&str>) -> CommandContext {
+        CommandContext {
+            args: args.into_iter().map(String::from).collect(),
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: Arc::new(InMemoryFs::new()),
+            exec_fn: None,
+            fetch_fn: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_help() {
+        let ctx = create_ctx(vec!["--help"]);
+        let result = FileCommand.execute(ctx).await;
+        assert!(result.stdout.contains("file"));
+        assert!(result.stdout.contains("-b"));
+    }
+
+    #[tokio::test]
+    async fn test_no_args() {
+        let ctx = create_ctx(vec![]);
+        let result = FileCommand.execute(ctx).await;
+        assert!(result.stderr.contains("Usage"));
+    }
+
+    #[tokio::test]
+    async fn test_text_file() {
+        let mut ctx = create_ctx(vec!["/test.txt"]);
+        let fs = Arc::new(InMemoryFs::new());
+        fs.write_file("/test.txt", b"hello world").await.unwrap();
+        ctx.fs = fs;
+        let result = FileCommand.execute(ctx).await;
+        assert!(result.stdout.contains("text"));
+    }
+
+    #[tokio::test]
+    async fn test_directory() {
+        let mut ctx = create_ctx(vec!["/"]);
+        let fs = Arc::new(InMemoryFs::new());
+        ctx.fs = fs;
+        let result = FileCommand.execute(ctx).await;
+        assert!(result.stdout.contains("directory"));
+    }
+
+    #[tokio::test]
+    async fn test_not_found() {
+        let ctx = create_ctx(vec!["/nonexistent"]);
+        let result = FileCommand.execute(ctx).await;
+        assert!(result.stdout.contains("cannot open"));
+    }
+
+    #[test]
+    fn test_get_extension() {
+        assert_eq!(get_extension("test.txt"), Some(".txt"));
+        assert_eq!(get_extension("file.tar.gz"), Some(".gz"));
+        assert_eq!(get_extension(".hidden"), Some(".hidden"));
+    }
+
+    #[test]
+    fn test_detect_type_by_extension() {
+        assert_eq!(detect_type_by_extension(".js").0, "JavaScript source");
+        assert_eq!(detect_type_by_extension(".py").0, "Python script");
+        assert_eq!(detect_type_by_extension(".json").0, "JSON data");
+    }
+}

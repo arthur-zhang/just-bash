@@ -125,3 +125,61 @@ impl Command for TimeoutCommand {
         exec_future.await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use crate::fs::InMemoryFs;
+
+    fn create_ctx(args: Vec<&str>) -> CommandContext {
+        CommandContext {
+            args: args.into_iter().map(String::from).collect(),
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: Arc::new(InMemoryFs::new()),
+            exec_fn: None,
+            fetch_fn: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_help() {
+        let ctx = create_ctx(vec!["--help"]);
+        let result = TimeoutCommand.execute(ctx).await;
+        assert!(result.stdout.contains("timeout"));
+        assert!(result.stdout.contains("DURATION"));
+    }
+
+    #[tokio::test]
+    async fn test_missing_operand() {
+        let ctx = create_ctx(vec![]);
+        let result = TimeoutCommand.execute(ctx).await;
+        assert!(result.stderr.contains("missing operand"));
+    }
+
+    #[tokio::test]
+    async fn test_invalid_duration() {
+        let ctx = create_ctx(vec!["abc", "echo", "hello"]);
+        let result = TimeoutCommand.execute(ctx).await;
+        assert!(result.stderr.contains("invalid time interval"));
+    }
+
+    #[tokio::test]
+    async fn test_no_exec_fn() {
+        let ctx = create_ctx(vec!["5", "echo", "hello"]);
+        let result = TimeoutCommand.execute(ctx).await;
+        assert!(result.stderr.contains("exec not available"));
+    }
+
+    #[test]
+    fn test_is_valid_duration() {
+        assert!(is_valid_duration("5"));
+        assert!(is_valid_duration("5s"));
+        assert!(is_valid_duration("5m"));
+        assert!(is_valid_duration("1.5h"));
+        assert!(!is_valid_duration("abc"));
+    }
+}

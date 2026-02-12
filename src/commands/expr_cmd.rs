@@ -259,3 +259,92 @@ impl<'a> ExprParser<'a> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use crate::fs::InMemoryFs;
+
+    fn create_ctx(args: Vec<&str>) -> CommandContext {
+        CommandContext {
+            args: args.into_iter().map(String::from).collect(),
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: Arc::new(InMemoryFs::new()),
+            exec_fn: None,
+            fetch_fn: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_missing_operand() {
+        let ctx = create_ctx(vec![]);
+        let result = ExprCommand.execute(ctx).await;
+        assert!(result.stderr.contains("missing operand"));
+    }
+
+    #[tokio::test]
+    async fn test_single_value() {
+        let ctx = create_ctx(vec!["42"]);
+        let result = ExprCommand.execute(ctx).await;
+        assert!(result.stdout.contains("42"));
+    }
+
+    #[tokio::test]
+    async fn test_addition() {
+        let ctx = create_ctx(vec!["2", "+", "3"]);
+        let result = ExprCommand.execute(ctx).await;
+        assert!(result.stdout.contains("5"));
+    }
+
+    #[tokio::test]
+    async fn test_subtraction() {
+        let ctx = create_ctx(vec!["10", "-", "4"]);
+        let result = ExprCommand.execute(ctx).await;
+        assert!(result.stdout.contains("6"));
+    }
+
+    #[tokio::test]
+    async fn test_multiplication() {
+        let ctx = create_ctx(vec!["3", "*", "4"]);
+        let result = ExprCommand.execute(ctx).await;
+        assert!(result.stdout.contains("12"));
+    }
+
+    #[tokio::test]
+    async fn test_division() {
+        let ctx = create_ctx(vec!["15", "/", "3"]);
+        let result = ExprCommand.execute(ctx).await;
+        assert!(result.stdout.contains("5"));
+    }
+
+    #[tokio::test]
+    async fn test_comparison() {
+        let ctx = create_ctx(vec!["5", ">", "3"]);
+        let result = ExprCommand.execute(ctx).await;
+        assert!(result.stdout.contains("1"));
+    }
+
+    #[tokio::test]
+    async fn test_length() {
+        let ctx = create_ctx(vec!["length", "hello"]);
+        let result = ExprCommand.execute(ctx).await;
+        assert!(result.stdout.contains("5"));
+    }
+
+    #[tokio::test]
+    async fn test_substr() {
+        let ctx = create_ctx(vec!["substr", "hello", "2", "3"]);
+        let result = ExprCommand.execute(ctx).await;
+        assert!(result.stdout.contains("ell"));
+    }
+
+    #[test]
+    fn test_evaluate_expr() {
+        assert_eq!(evaluate_expr(&["5".to_string()]).unwrap(), "5");
+        assert_eq!(evaluate_expr(&["2".to_string(), "+".to_string(), "3".to_string()]).unwrap(), "5");
+    }
+}

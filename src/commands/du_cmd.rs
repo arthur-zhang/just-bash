@@ -187,3 +187,61 @@ async fn calculate_size(
 
     Ok((output, dir_size))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use crate::fs::{InMemoryFs, FileSystem};
+
+    fn create_ctx(args: Vec<&str>) -> CommandContext {
+        CommandContext {
+            args: args.into_iter().map(String::from).collect(),
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: Arc::new(InMemoryFs::new()),
+            exec_fn: None,
+            fetch_fn: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_help() {
+        let ctx = create_ctx(vec!["--help"]);
+        let result = DuCommand.execute(ctx).await;
+        assert!(result.stdout.contains("du"));
+        assert!(result.stdout.contains("-h"));
+    }
+
+    #[tokio::test]
+    async fn test_file_size() {
+        let mut ctx = create_ctx(vec!["/test.txt"]);
+        let fs = Arc::new(InMemoryFs::new());
+        fs.write_file("/test.txt", b"hello world").await.unwrap();
+        ctx.fs = fs;
+        let result = DuCommand.execute(ctx).await;
+        assert!(result.stdout.contains("test.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_not_found() {
+        let ctx = create_ctx(vec!["/nonexistent"]);
+        let result = DuCommand.execute(ctx).await;
+        assert!(result.stderr.contains("No such file"));
+    }
+
+    #[test]
+    fn test_format_size_bytes() {
+        assert_eq!(format_size(500, false), "1");
+        assert_eq!(format_size(2048, false), "2");
+    }
+
+    #[test]
+    fn test_format_size_human() {
+        assert_eq!(format_size(500, true), "500");
+        assert!(format_size(2048, true).contains("K"));
+        assert!(format_size(2 * 1024 * 1024, true).contains("M"));
+    }
+}

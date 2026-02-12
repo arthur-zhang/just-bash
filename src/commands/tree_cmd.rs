@@ -283,3 +283,62 @@ async fn build_tree_recursive(
 
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use crate::fs::{InMemoryFs, FileSystem};
+
+    fn create_ctx(args: Vec<&str>) -> CommandContext {
+        CommandContext {
+            args: args.into_iter().map(String::from).collect(),
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: Arc::new(InMemoryFs::new()),
+            exec_fn: None,
+            fetch_fn: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_help() {
+        let ctx = create_ctx(vec!["--help"]);
+        let result = TreeCommand.execute(ctx).await;
+        assert!(result.stdout.contains("tree"));
+        assert!(result.stdout.contains("-a"));
+    }
+
+    #[tokio::test]
+    async fn test_empty_dir() {
+        let mut ctx = create_ctx(vec!["/"]);
+        let fs = Arc::new(InMemoryFs::new());
+        ctx.fs = fs;
+        let result = TreeCommand.execute(ctx).await;
+        assert!(result.stdout.contains("/"));
+        assert!(result.stdout.contains("director"));
+    }
+
+    #[tokio::test]
+    async fn test_with_files() {
+        let mut ctx = create_ctx(vec!["/"]);
+        let fs = Arc::new(InMemoryFs::new());
+        fs.write_file("/test.txt", b"hello").await.unwrap();
+        ctx.fs = fs;
+        let result = TreeCommand.execute(ctx).await;
+        assert!(result.stdout.contains("test.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_directories_only() {
+        let mut ctx = create_ctx(vec!["-d", "/"]);
+        let fs = Arc::new(InMemoryFs::new());
+        fs.write_file("/test.txt", b"hello").await.unwrap();
+        fs.mkdir("/subdir", &Default::default()).await.unwrap();
+        ctx.fs = fs;
+        let result = TreeCommand.execute(ctx).await;
+        assert!(result.stdout.contains("subdir"));
+    }
+}

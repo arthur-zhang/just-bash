@@ -157,3 +157,70 @@ impl Command for OdCommand {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use crate::fs::InMemoryFs;
+
+    fn create_ctx(args: Vec<&str>) -> CommandContext {
+        CommandContext {
+            args: args.into_iter().map(String::from).collect(),
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: Arc::new(InMemoryFs::new()),
+            exec_fn: None,
+            fetch_fn: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_help() {
+        let ctx = create_ctx(vec!["--help"]);
+        let result = OdCommand.execute(ctx).await;
+        assert!(result.stdout.contains("od"));
+        assert!(result.stdout.contains("-c"));
+    }
+
+    #[tokio::test]
+    async fn test_octal_output() {
+        let mut ctx = create_ctx(vec![]);
+        ctx.stdin = "AB".to_string();
+        let result = OdCommand.execute(ctx).await;
+        assert!(result.stdout.contains("101"));
+        assert!(result.stdout.contains("102"));
+    }
+
+    #[tokio::test]
+    async fn test_char_output() {
+        let mut ctx = create_ctx(vec!["-c"]);
+        ctx.stdin = "AB".to_string();
+        let result = OdCommand.execute(ctx).await;
+        assert!(result.stdout.contains("A"));
+        assert!(result.stdout.contains("B"));
+    }
+
+    #[tokio::test]
+    async fn test_hex_output() {
+        let mut ctx = create_ctx(vec!["-t", "x1"]);
+        ctx.stdin = "AB".to_string();
+        let result = OdCommand.execute(ctx).await;
+        assert!(result.stdout.contains("41"));
+        assert!(result.stdout.contains("42"));
+    }
+
+    #[test]
+    fn test_format_char_byte() {
+        assert!(format_char_byte(b'A').contains("A"));
+        assert!(format_char_byte(b'\n').contains("\\n"));
+        assert!(format_char_byte(0).contains("\\0"));
+    }
+
+    #[test]
+    fn test_format_octal_byte() {
+        assert_eq!(format_octal_byte(65).trim(), "101");
+    }
+}

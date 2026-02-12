@@ -205,3 +205,89 @@ impl Command for ColumnCommand {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use crate::fs::InMemoryFs;
+
+    fn create_ctx(args: Vec<&str>) -> CommandContext {
+        CommandContext {
+            args: args.into_iter().map(String::from).collect(),
+            stdin: String::new(),
+            cwd: "/".to_string(),
+            env: HashMap::new(),
+            fs: Arc::new(InMemoryFs::new()),
+            exec_fn: None,
+            fetch_fn: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_help() {
+        let ctx = create_ctx(vec!["--help"]);
+        let result = ColumnCommand.execute(ctx).await;
+        assert!(result.stdout.contains("column"));
+        assert!(result.stdout.contains("-t"));
+    }
+
+    #[tokio::test]
+    async fn test_empty_input() {
+        let ctx = create_ctx(vec![]);
+        let result = ColumnCommand.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_table_mode() {
+        let mut ctx = create_ctx(vec!["-t"]);
+        ctx.stdin = "a b c\n1 2 3\n".to_string();
+        let result = ColumnCommand.execute(ctx).await;
+        assert!(result.stdout.contains("a"));
+        assert!(result.stdout.contains("1"));
+    }
+
+    #[tokio::test]
+    async fn test_fill_mode() {
+        let mut ctx = create_ctx(vec![]);
+        ctx.stdin = "a\nb\nc\nd\n".to_string();
+        let result = ColumnCommand.execute(ctx).await;
+        assert!(result.stdout.contains("a"));
+    }
+
+    #[test]
+    fn test_split_fields() {
+        let fields = split_fields("a b c", None, false);
+        assert_eq!(fields, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn test_split_fields_with_separator() {
+        let fields = split_fields("a,b,c", Some(","), false);
+        assert_eq!(fields, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn test_calculate_column_widths() {
+        let rows = vec![
+            vec!["a".to_string(), "bb".to_string()],
+            vec!["ccc".to_string(), "d".to_string()],
+        ];
+        let widths = calculate_column_widths(&rows);
+        assert_eq!(widths, vec![3, 2]);
+    }
+
+    #[test]
+    fn test_format_table() {
+        let rows = vec![
+            vec!["a".to_string(), "b".to_string()],
+            vec!["cc".to_string(), "d".to_string()],
+        ];
+        let output = format_table(&rows, "  ");
+        assert!(output.contains("a "));
+        assert!(output.contains("cc"));
+    }
+}

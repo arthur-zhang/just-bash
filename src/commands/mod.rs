@@ -5,6 +5,8 @@ pub mod basename;
 pub mod cat;
 pub mod chmod;
 pub mod clear_cmd;
+pub mod column_cmd;
+pub mod comm_cmd;
 pub mod cut;
 pub mod cp;
 pub mod curl;
@@ -62,5 +64,5 @@ pub mod utils;
 pub mod query_engine;
 pub mod yq;
 
-pub use registry::{CommandRegistry, register_batch_a, register_batch_b, register_batch_c, register_batch_d, register_batch_e, register_batch_f, register_batch_g, register_batch_h, create_batch_a_registry, create_batch_ab_registry, create_batch_abc_registry, create_batch_abcd_registry, create_batch_abcde_registry, create_batch_abcdef_registry, create_batch_abcdefg_registry, create_batch_abcdefgh_registry};
+pub use registry::{CommandRegistry, register_batch_a, register_batch_b, register_batch_c, register_batch_d, register_batch_e, register_batch_f, register_batch_g, register_batch_h, register_batch_i, create_batch_a_registry, create_batch_ab_registry, create_batch_abc_registry, create_batch_abcd_registry, create_batch_abcde_registry, create_batch_abcdef_registry, create_batch_abcdefg_registry, create_batch_abcdefgh_registry, create_batch_abcdefghi_registry};
 pub use types::{Command, CommandContext, CommandResult};

@@ -109,6 +109,10 @@ use super::expand_cmd::ExpandCommand;
 use super::fold_cmd::FoldCommand;
 use super::strings_cmd::StringsCommand;
 
+// Batch I imports
+use super::column_cmd::ColumnCommand;
+use super::comm_cmd::CommCommand;
+
 /// 注册批次 A 的所有命令
 pub fn register_batch_a(registry: &mut CommandRegistry) {
     registry.register(Box::new(BasenameCommand));
@@ -287,5 +291,26 @@ pub fn create_batch_abcdefgh_registry() -> CommandRegistry {
     register_batch_f(&mut registry);
     register_batch_g(&mut registry);
     register_batch_h(&mut registry);
+    registry
+}
+
+/// 注册批次 I 的所有命令 (column, comm)
+pub fn register_batch_i(registry: &mut CommandRegistry) {
+    registry.register(Box::new(ColumnCommand));
+    registry.register(Box::new(CommCommand));
+}
+
+/// 创建包含批次 A-I 命令的注册表
+pub fn create_batch_abcdefghi_registry() -> CommandRegistry {
+    let mut registry = CommandRegistry::new();
+    register_batch_a(&mut registry);
+    register_batch_b(&mut registry);
+    register_batch_c(&mut registry);
+    register_batch_d(&mut registry);
+    register_batch_e(&mut registry);
+    register_batch_f(&mut registry);
+    register_batch_g(&mut registry);
+    register_batch_h(&mut registry);
+    register_batch_i(&mut registry);
     registry
 }

@@ -961,4 +961,869 @@ mod tests {
         assert_eq!(result.exit_code, 0);
         assert_eq!(result.stdout, "");
     }
+
+    // ===== Basic Operations =====
+
+    #[tokio::test]
+    async fn test_jq_pretty_print_arrays() {
+        let ctx = make_ctx(&["."], "[1,2,3]");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("1"));
+        assert!(result.stdout.contains("2"));
+        assert!(result.stdout.contains("3"));
+    }
+
+    #[tokio::test]
+    async fn test_jq_nested_key_access() {
+        let ctx = make_ctx(&[".a.b"], r#"{"a":{"b":"nested"}}"#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "\"nested\"");
+    }
+
+    #[tokio::test]
+    async fn test_jq_missing_key_returns_null() {
+        let ctx = make_ctx(&[".missing"], r#"{"a":1}"#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "null");
+    }
+
+    #[tokio::test]
+    async fn test_jq_access_numeric_values() {
+        let ctx = make_ctx(&[".count"], r#"{"count":42}"#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "42");
+    }
+
+    #[tokio::test]
+    async fn test_jq_access_boolean_values() {
+        let ctx = make_ctx(&[".active"], r#"{"active":true}"#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "true");
+    }
+
+    #[tokio::test]
+    async fn test_jq_array_element_access() {
+        let ctx = make_ctx(&[".[0]"], r#"["a","b","c"]"#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "\"a\"");
+    }
+
+    #[tokio::test]
+    async fn test_jq_array_negative_index() {
+        let ctx = make_ctx(&[".[-1]"], r#"["a","b","c"]"#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "\"c\"");
+    }
+
+    #[tokio::test]
+    async fn test_jq_array_out_of_bounds() {
+        let ctx = make_ctx(&[".[99]"], "[1,2]");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "null");
+    }
+
+    #[tokio::test]
+    async fn test_jq_array_iteration() {
+        let ctx = make_ctx(&[".[]"], "[1,2,3]");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "1\n2\n3");
+    }
+
+    #[tokio::test]
+    async fn test_jq_object_values_iteration() {
+        let ctx = make_ctx(&[".[]"], r#"{"a":1,"b":2}"#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        let output = result.stdout.trim();
+        assert!(output.contains("1"));
+        assert!(output.contains("2"));
+    }
+
+    #[tokio::test]
+    async fn test_jq_nested_array_iteration() {
+        let ctx = make_ctx(&[".items[]"], r#"{"items":[1,2,3]}"#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "1\n2\n3");
+    }
+
+    #[tokio::test]
+    async fn test_jq_pipe_filters() {
+        let ctx = make_ctx(&[".data | .value"], r#"{"data":{"value":42}}"#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "42");
+    }
+
+    #[tokio::test]
+    async fn test_jq_chain_multiple_pipes() {
+        let ctx = make_ctx(&[".a | .b | .c"], r#"{"a":{"b":{"c":"deep"}}}"#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "\"deep\"");
+    }
+
+    #[tokio::test]
+    async fn test_jq_array_slice_start_end() {
+        let ctx = make_ctx(&[".[2:4]"], "[0,1,2,3,4,5]");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("2"));
+        assert!(result.stdout.contains("3"));
+    }
+
+    #[tokio::test]
+    async fn test_jq_array_slice_from_start() {
+        let ctx = make_ctx(&[".[:3]"], "[0,1,2,3,4]");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("0"));
+        assert!(result.stdout.contains("1"));
+        assert!(result.stdout.contains("2"));
+    }
+
+    #[tokio::test]
+    async fn test_jq_array_slice_to_end() {
+        let ctx = make_ctx(&[".[3:]"], "[0,1,2,3,4]");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("3"));
+        assert!(result.stdout.contains("4"));
+    }
+
+    #[tokio::test]
+    async fn test_jq_string_slice() {
+        let ctx = make_ctx(&[".[1:4]"], r#""hello""#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "\"ell\"");
+    }
+
+    #[tokio::test]
+    async fn test_jq_slice_negative_index() {
+        let ctx = make_ctx(&[".[-2:]"], "[0,1,2,3,4]");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("3"));
+        assert!(result.stdout.contains("4"));
+    }
+
+    #[tokio::test]
+    async fn test_jq_comma_operator_two_values() {
+        let ctx = make_ctx(&[".a, .b"], r#"{"a":1,"b":2}"#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "1\n2");
+    }
+
+    #[tokio::test]
+    async fn test_jq_comma_operator_three_values() {
+        let ctx = make_ctx(&[".x, .y, .z"], r#"{"x":1,"y":2,"z":3}"#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "1\n2\n3");
+    }
+
+    // ===== Filters =====
+
+    #[tokio::test]
+    async fn test_jq_select_filter() {
+        let ctx = make_ctx(&["[.[] | select(. > 3)]"], "[1,2,3,4,5]");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("4"));
+        assert!(result.stdout.contains("5"));
+    }
+
+    #[tokio::test]
+    async fn test_jq_map_transform() {
+        let ctx = make_ctx(&["map(. * 2)"], "[1,2,3]");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("2"));
+        assert!(result.stdout.contains("4"));
+        assert!(result.stdout.contains("6"));
+    }
+
+    #[tokio::test]
+    async fn test_jq_select_objects_by_field() {
+        let ctx = make_ctx(&["-c", "[.[] | select(.n > 2)]"], r#"[{"n":1},{"n":5},{"n":2}]"#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains(r#"{"n":5}"#));
+    }
+
+    #[tokio::test]
+    async fn test_jq_has_object_key() {
+        let ctx = make_ctx(&[r#"has("foo")"#], r#"{"foo":42}"#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "true");
+    }
+
+    #[tokio::test]
+    async fn test_jq_has_missing_key() {
+        let ctx = make_ctx(&[r#"has("bar")"#], r#"{"foo":42}"#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "false");
+    }
+
+    #[tokio::test]
+    async fn test_jq_has_array_index() {
+        let ctx = make_ctx(&["has(1)"], "[1,2,3]");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "true");
+    }
+
+    #[tokio::test]
+    async fn test_jq_contains_array() {
+        let ctx = make_ctx(&["contains([2])"], "[1,2,3]");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "true");
+    }
+
+    #[tokio::test]
+    async fn test_jq_contains_object() {
+        let ctx = make_ctx(&[r#"contains({"a":1})"#], r#"{"a":1,"b":2}"#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "true");
+    }
+
+    #[tokio::test]
+    async fn test_jq_any_with_expression() {
+        let ctx = make_ctx(&["any(. > 3)"], "[1,2,3,4,5]");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "true");
+    }
+
+    #[tokio::test]
+    async fn test_jq_all_with_expression() {
+        let ctx = make_ctx(&["all(. > 0)"], "[1,2,3]");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "true");
+    }
+
+    #[tokio::test]
+    async fn test_jq_if_then_else_2() {
+        let ctx = make_ctx(&[r#"if . > 3 then "big" else "small" end"#], "5");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "\"big\"");
+    }
+
+    #[tokio::test]
+    async fn test_jq_if_else_branch() {
+        let ctx = make_ctx(&[r#"if . > 3 then "big" else "small" end"#], "2");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "\"small\"");
+    }
+
+    #[tokio::test]
+    async fn test_jq_if_elif() {
+        let ctx = make_ctx(&[r#"if . > 10 then "big" elif . > 3 then "medium" else "small" end"#], "5");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "\"medium\"");
+    }
+
+    #[tokio::test]
+    async fn test_jq_optional_operator_null() {
+        let ctx = make_ctx(&[".foo?"], "null");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "null");
+    }
+
+    #[tokio::test]
+    async fn test_jq_optional_operator_present() {
+        let ctx = make_ctx(&[".foo?"], r#"{"foo":42}"#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "42");
+    }
+
+    #[tokio::test]
+    async fn test_jq_try_catch_2() {
+        let ctx = make_ctx(&[r#"try error("oops") catch "caught""#], "1");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "\"caught\"");
+    }
+
+    #[tokio::test]
+    async fn test_jq_variable_binding() {
+        let ctx = make_ctx(&[". as $x | $x * $x"], "5");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "25");
+    }
+
+    #[tokio::test]
+    async fn test_jq_variable_in_object() {
+        let ctx = make_ctx(&["-c", ". as $n | {value: $n, doubled: ($n * 2)}"], "3");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), r#"{"value":3,"doubled":6}"#);
+    }
+
+    // ===== Builtin Functions =====
+
+    #[tokio::test]
+    async fn test_jq_keys_sorted() {
+        let ctx = make_ctx(&["keys"], r#"{"b":1,"a":2}"#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("\"a\""));
+        assert!(result.stdout.contains("\"b\""));
+    }
+
+    #[tokio::test]
+    async fn test_jq_length_array() {
+        let ctx = make_ctx(&["length"], "[1,2,3,4,5]");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "5");
+    }
+
+    #[tokio::test]
+    async fn test_jq_length_string() {
+        let ctx = make_ctx(&["length"], r#""hello""#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "5");
+    }
+
+    #[tokio::test]
+    async fn test_jq_length_object() {
+        let ctx = make_ctx(&["length"], r#"{"a":1,"b":2}"#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "2");
+    }
+
+    #[tokio::test]
+    async fn test_jq_type_object() {
+        let ctx = make_ctx(&["type"], r#"{"a":1}"#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "\"object\"");
+    }
+
+    #[tokio::test]
+    async fn test_jq_type_array() {
+        let ctx = make_ctx(&["type"], "[1,2]");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "\"array\"");
+    }
+
+    #[tokio::test]
+    async fn test_jq_first_element() {
+        let ctx = make_ctx(&["first"], "[5,10,15]");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "5");
+    }
+
+    #[tokio::test]
+    async fn test_jq_last_element() {
+        let ctx = make_ctx(&["last"], "[5,10,15]");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "15");
+    }
+
+    #[tokio::test]
+    async fn test_jq_reverse_array() {
+        let ctx = make_ctx(&["-c", "reverse"], "[1,2,3]");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "[3,2,1]");
+    }
+
+    #[tokio::test]
+    async fn test_jq_sort_array() {
+        let ctx = make_ctx(&["-c", "sort"], "[3,1,2]");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "[1,2,3]");
+    }
+
+    #[tokio::test]
+    async fn test_jq_unique_array() {
+        let ctx = make_ctx(&["-c", "unique"], "[1,2,1,3,2]");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "[1,2,3]");
+    }
+
+    #[tokio::test]
+    async fn test_jq_add_numbers() {
+        let ctx = make_ctx(&["add"], "[1,2,3,4]");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "10");
+    }
+
+    #[tokio::test]
+    async fn test_jq_min_array() {
+        let ctx = make_ctx(&["min"], "[5,2,8,1,9]");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "1");
+    }
+
+    #[tokio::test]
+    async fn test_jq_max_array() {
+        let ctx = make_ctx(&["max"], "[5,2,8,1,9]");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "9");
+    }
+
+    // ===== Operators =====
+
+    #[tokio::test]
+    async fn test_jq_add_numbers_op() {
+        let ctx = make_ctx(&[". + 3"], "5");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "8");
+    }
+
+    #[tokio::test]
+    async fn test_jq_subtract_numbers() {
+        let ctx = make_ctx(&[". - 4"], "10");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "6");
+    }
+
+    #[tokio::test]
+    async fn test_jq_multiply_numbers() {
+        let ctx = make_ctx(&[". * 7"], "6");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "42");
+    }
+
+    #[tokio::test]
+    async fn test_jq_divide_numbers() {
+        let ctx = make_ctx(&[". / 4"], "20");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "5");
+    }
+
+    #[tokio::test]
+    async fn test_jq_modulo_numbers() {
+        let ctx = make_ctx(&[". % 5"], "17");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "2");
+    }
+
+    #[tokio::test]
+    async fn test_jq_concatenate_strings() {
+        let ctx = make_ctx(&[".a + .b"], r#"{"a":"foo","b":"bar"}"#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "\"foobar\"");
+    }
+
+    #[tokio::test]
+    async fn test_jq_concatenate_arrays() {
+        let ctx = make_ctx(&[".[0] + .[1]"], "[[1,2],[3,4]]");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("1"));
+        assert!(result.stdout.contains("2"));
+        assert!(result.stdout.contains("3"));
+        assert!(result.stdout.contains("4"));
+    }
+
+    #[tokio::test]
+    async fn test_jq_merge_objects() {
+        let ctx = make_ctx(&["-c", ".[0] + .[1]"], r#"[{"a":1},{"b":2}]"#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), r#"{"a":1,"b":2}"#);
+    }
+
+    #[tokio::test]
+    async fn test_jq_compare_equal() {
+        let ctx = make_ctx(&[". == 5"], "5");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "true");
+    }
+
+    #[tokio::test]
+    async fn test_jq_compare_not_equal() {
+        let ctx = make_ctx(&[". != 3"], "5");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "true");
+    }
+
+    #[tokio::test]
+    async fn test_jq_compare_less_than() {
+        let ctx = make_ctx(&[". < 5"], "3");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "true");
+    }
+
+    #[tokio::test]
+    async fn test_jq_compare_greater_than() {
+        let ctx = make_ctx(&[". > 5"], "10");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "true");
+    }
+
+    #[tokio::test]
+    async fn test_jq_compare_less_equal() {
+        let ctx = make_ctx(&[". <= 5"], "5");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "true");
+    }
+
+    #[tokio::test]
+    async fn test_jq_compare_greater_equal() {
+        let ctx = make_ctx(&[". >= 5"], "5");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "true");
+    }
+
+    #[tokio::test]
+    async fn test_jq_logical_and() {
+        let ctx = make_ctx(&[". and true"], "true");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "true");
+    }
+
+    #[tokio::test]
+    async fn test_jq_logical_or() {
+        let ctx = make_ctx(&[". or true"], "false");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "true");
+    }
+
+    #[tokio::test]
+    async fn test_jq_logical_not() {
+        let ctx = make_ctx(&["not"], "true");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "false");
+    }
+
+    #[tokio::test]
+    async fn test_jq_alternative_operator_null() {
+        let ctx = make_ctx(&[r#".a // "default""#], r#"{"a":null}"#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "\"default\"");
+    }
+
+    #[tokio::test]
+    async fn test_jq_alternative_operator_value() {
+        let ctx = make_ctx(&[r#".a // "default""#], r#"{"a":42}"#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "42");
+    }
+
+    // ===== Math Functions =====
+
+    #[tokio::test]
+    async fn test_jq_floor() {
+        let ctx = make_ctx(&["floor"], "3.7");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "3");
+    }
+
+    #[tokio::test]
+    async fn test_jq_ceil() {
+        let ctx = make_ctx(&["ceil"], "3.2");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "4");
+    }
+
+    #[tokio::test]
+    async fn test_jq_round() {
+        let ctx = make_ctx(&["round"], "3.5");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "4");
+    }
+
+    #[tokio::test]
+    async fn test_jq_sqrt() {
+        let ctx = make_ctx(&["sqrt"], "16");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "4");
+    }
+
+    #[tokio::test]
+    async fn test_jq_abs() {
+        let ctx = make_ctx(&["abs"], "-5");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "5");
+    }
+
+    // ===== Type Conversion =====
+
+    #[tokio::test]
+    async fn test_jq_tostring() {
+        let ctx = make_ctx(&["tostring"], "42");
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "\"42\"");
+    }
+
+    #[tokio::test]
+    async fn test_jq_tonumber() {
+        let ctx = make_ctx(&["tonumber"], r#""42""#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "42");
+    }
+
+    // ===== String Functions =====
+
+    #[tokio::test]
+    async fn test_jq_split_strings() {
+        let ctx = make_ctx(&[r#"split(",")"#], r#""a,b,c""#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("\"a\""));
+        assert!(result.stdout.contains("\"b\""));
+        assert!(result.stdout.contains("\"c\""));
+    }
+
+    #[tokio::test]
+    async fn test_jq_join_arrays() {
+        let ctx = make_ctx(&[r#"join("-")"#], r#"["a","b","c"]"#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "\"a-b-c\"");
+    }
+
+    #[tokio::test]
+    async fn test_jq_test_regex() {
+        let ctx = make_ctx(&[r#"test("bar")"#], r#""foobar""#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "true");
+    }
+
+    #[tokio::test]
+    async fn test_jq_startswith() {
+        let ctx = make_ctx(&[r#"startswith("hello")"#], r#""hello world""#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "true");
+    }
+
+    #[tokio::test]
+    async fn test_jq_endswith() {
+        let ctx = make_ctx(&[r#"endswith("world")"#], r#""hello world""#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "true");
+    }
+
+    #[tokio::test]
+    async fn test_jq_ltrimstr() {
+        let ctx = make_ctx(&[r#"ltrimstr("hello ")"#], r#""hello world""#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "\"world\"");
+    }
+
+    #[tokio::test]
+    async fn test_jq_rtrimstr() {
+        let ctx = make_ctx(&[r#"rtrimstr(" world")"#], r#""hello world""#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "\"hello\"");
+    }
+
+    #[tokio::test]
+    async fn test_jq_ascii_downcase() {
+        let ctx = make_ctx(&["ascii_downcase"], r#""HELLO""#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "\"hello\"");
+    }
+
+    #[tokio::test]
+    async fn test_jq_ascii_upcase() {
+        let ctx = make_ctx(&["ascii_upcase"], r#""hello""#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "\"HELLO\"");
+    }
+
+    #[tokio::test]
+    async fn test_jq_index_in_string() {
+        let ctx = make_ctx(&[r#"index("bar")"#], r#""foobar""#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "3");
+    }
+
+    // ===== Object and Array Construction =====
+
+    #[tokio::test]
+    async fn test_jq_object_construction_static_keys() {
+        let ctx = make_ctx(&["-c", "{n: .name, v: .value}"], r#"{"name":"test","value":42}"#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), r#"{"n":"test","v":42}"#);
+    }
+
+    #[tokio::test]
+    async fn test_jq_object_construction_shorthand() {
+        let ctx = make_ctx(&["-c", "{name, value}"], r#"{"name":"test","value":42}"#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), r#"{"name":"test","value":42}"#);
+    }
+
+    #[tokio::test]
+    async fn test_jq_array_construction_from_values() {
+        let ctx = make_ctx(&["[.a, .b]"], r#"{"a":1,"b":2}"#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("1"));
+        assert!(result.stdout.contains("2"));
+    }
+
+    #[tokio::test]
+    async fn test_jq_array_from_object_values() {
+        let ctx = make_ctx(&["[.[]]"], r#"{"a":1,"b":2,"c":3}"#);
+        let cmd = JqCommand;
+        let result = cmd.execute(ctx).await;
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("1"));
+        assert!(result.stdout.contains("2"));
+        assert!(result.stdout.contains("3"));
+    }
 }
